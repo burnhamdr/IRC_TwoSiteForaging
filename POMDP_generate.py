@@ -1,4 +1,5 @@
 from twoboxCol import *
+from twoboxCazettes import *
 from datetime import datetime
 import os
 import pickle
@@ -122,4 +123,104 @@ def twoboxColGenerate(parameters, parametersExp, sample_length, sample_number, n
         print('Data stored in files')
 
     return obsN, latN, truthN, datestring
+
+
+def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_number, nq, nr = 2, nl = 3, na = 5,
+                      discount = 0.99, save = True):
+    """
+    Generate data of the teacher POMDPS
+    """
+
+    datestring = datetime.strftime(datetime.now(), '%m%d%Y(%H%M%S)')  # current time used to set file name
+
+    print("\nSet the parameters of the model... \n")
+
+    beta = 0  # available food dropped back into box after button press
+    psw = parameters[0]  # reward becomes available in box 1
+    prwd = parameters[1]  # reward becomes available in box 2
+    delta = 0  # animal trips, doesn't go to target location
+    direct = 0  # animal goes right to target, skipping location 0
+    rho = 1  # food in mouth is consumed
+    # State rewards
+    Reward = 1  # reward per time step with food in mouth
+    groom = parameters[2]  # location 0 reward
+    # Action costs
+    travelCost = parameters[3]
+    pushButtonCost = parameters[4]
+    temperatureQ = parameters[5]
+
+    psw_e = parametersExp[0]
+    prwd_e = parametersExp[1]
+    groom_e = parametersExp[2]
+    travelCost_e = parametersExp[3]
+    pushButtonCost_e = parametersExp[4]
+
+    print("Generating data...")
+    T = sample_length
+    N = sample_number
+    twoboxColdata = twoboxCazettesMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+    twoboxColdata.dataGenerate_sfm()
+
+    hybrid = twoboxColdata.hybrid
+    action = twoboxColdata.action
+    location = twoboxColdata.location
+    belief1 = twoboxColdata.belief1
+    belief2 = twoboxColdata.belief2
+    reward = twoboxColdata.reward
+    trueState1 = twoboxColdata.trueState1
+    trueState2 = twoboxColdata.trueState2
+
+    actionDist = twoboxColdata.actionDist
+    belief1Dist = twoboxColdata.belief1Dist
+    belief2Dist = twoboxColdata.belief2Dist
+
+    # sampleNum * sampleTime * dim of observations(=3 here, action, reward, location)
+    # organize data
+    obsN = np.dstack([action, reward, location, actionDist])  # includes the action and the observable states
+    latN = np.dstack([belief1, belief2, belief1Dist, belief2Dist])
+    truthN = np.dstack([trueState1, trueState2])
+    dataN = np.dstack([obsN, latN, truthN])
+
+    ### write data to file
+    data_dict = {'observations': obsN,
+                 'beliefs': latN,
+                 'trueStates': truthN,
+                 'allData': dataN}
+
+    ### write all model parameters to file
+    para_dict = {'discount': discount,
+                 'nq': nq,
+                 'nr': nr,
+                 'nl': nl,
+                 'na': na,
+                 'foodDrop': beta,
+                 'prwd': prwd,
+                 'psw': psw,
+                 'consume': rho,
+                 'reward': Reward,
+                 'groom': groom,
+                 'travelCost': travelCost,
+                 'pushButtonCost': pushButtonCost,
+                 'prwd_Experiment': prwd_e,
+                 'psw_Experiment': psw_e,
+                 'temperature': temperatureQ,
+                 'sample_length': sample_length,
+                 'sample_number': sample_number
+                 }
+
+    if save:
+        # create a file that saves the parameter dictionary using pickle
+        para_output = open(path + '/Results/' + datestring + '_para_twoboxCazettes' + '.pkl', 'wb')
+        pickle.dump(para_dict, para_output)
+        para_output.close()
+
+        data_output = open(path + '/Results/' + datestring + '_dataN_twoboxCazettes' + '.pkl', 'wb')
+        pickle.dump(data_dict, data_output)
+        data_output.close()
+
+        print('Data stored in files')
+
+    return obsN, latN, truthN, datestring
+
+
 
