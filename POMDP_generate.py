@@ -125,8 +125,8 @@ def twoboxColGenerate(parameters, parametersExp, sample_length, sample_number, n
     return obsN, latN, truthN, datestring
 
 
-def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_number, nq, nr = 2, nl = 3, na = 5,
-                      discount = 0.99, save = True):
+def twoboxCazettesGenerate(exp_type, parameters, parametersExp, sample_length, sample_number, nq, nr = 2, nl = 3, na = 5,
+                           discount = 0.99, save = True, lick_state=False):
     """
     Generate data of the teacher POMDPS
     """
@@ -134,31 +134,40 @@ def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_numb
     datestring = datetime.strftime(datetime.now(), '%m%d%Y(%H%M%S)')  # current time used to set file name
 
     print("\nSet the parameters of the model... \n")
-
-    beta = 0  # available food dropped back into box after button press
+    
     psw = parameters[0]  # reward becomes available in box 1
     prwd = parameters[1]  # reward becomes available in box 2
+    psw_e = parametersExp[0]
+    prwd_e = parametersExp[1]
+
+    beta = 0  # available food dropped back into box after button press
     delta = 0  # animal trips, doesn't go to target location
     direct = 0  # animal goes right to target, skipping location 0
     rho = 1  # food in mouth is consumed
     # State rewards
-    Reward = 1  # reward per time step with food in mouth
+    Reward = 100  # reward per time step with food in mouth
     groom = parameters[2]  # location 0 reward
     # Action costs
     travelCost = parameters[3]
     pushButtonCost = parameters[4]
-    temperatureQ = parameters[5]
+    startPushButtonCost = parameters[5]
+    temperatureQ = parameters[6]
 
-    psw_e = parametersExp[0]
-    prwd_e = parametersExp[1]
     groom_e = parametersExp[2]
     travelCost_e = parametersExp[3]
     pushButtonCost_e = parametersExp[4]
+    startPushButtonCost_e = parametersExp[5]
 
     print("Generating data...")
     T = sample_length
     N = sample_number
-    twoboxColdata = twoboxCazettesMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+    if exp_type == 'dependent':
+        twoboxColdata = twoboxCazettesMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N, lick_state)
+    elif exp_type == 'independent':
+        twoboxColdata = twoboxCazettesIndependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+    elif exp_type == 'independentDependent':
+        twoboxColdata = twoboxCazettesIndependentDependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+    
     twoboxColdata.dataGenerate_sfm()
 
     hybrid = twoboxColdata.hybrid
@@ -169,18 +178,39 @@ def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_numb
     reward = twoboxColdata.reward
     trueState1 = twoboxColdata.trueState1
     trueState2 = twoboxColdata.trueState2
+    color1 = twoboxColdata.color1
+    color2 = twoboxColdata.color2
 
     actionDist = twoboxColdata.actionDist
     belief1Dist = twoboxColdata.belief1Dist
     belief2Dist = twoboxColdata.belief2Dist
 
     # sampleNum * sampleTime * dim of observations(=3 here, action, reward, location)
-    # organize data
-    obsN = np.dstack([action, reward, location, actionDist])  # includes the action and the observable states
-    latN = np.dstack([belief1, belief2, belief1Dist, belief2Dist])
-    truthN = np.dstack([trueState1, trueState2])
-    dataN = np.dstack([obsN, latN, truthN])
+    # organize data    
+    obsN = {'action': action, 
+            'reward': reward, 
+            'site_location': location, 
+            'color1': color1, 
+            'color2': color2, 
+            'actionDist': actionDist}
+    latN = {'belief1': belief1,
+            'belief2': belief2,
+            'belief1Dist': belief1Dist,
+            'belief2Dist': belief2Dist}
 
+    truthN = {'trueState1': trueState1, 'trueState2': trueState2}
+    dataN = {'observations': obsN, 'beliefs': latN, 'trueStates': truthN}
+
+    if exp_type == 'dependent':
+        locationInd = twoboxColdata.location_ind
+        abstractLocations = twoboxColdata.abstract_locations
+        obsN['locationInd'] = locationInd
+        obsN['abstractLocations'] = abstractLocations
+    if lick_state:
+        pb_trials = np.zeros_like(action)
+        pb_trials[action == 2] = 1
+        obsN['pb_trials'] = pb_trials
+    
     ### write data to file
     data_dict = {'observations': obsN,
                  'beliefs': latN,
@@ -193,16 +223,18 @@ def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_numb
                  'nr': nr,
                  'nl': nl,
                  'na': na,
-                 'foodDrop': beta,
-                 'prwd': prwd,
                  'psw': psw,
+                 'prwd': prwd,
+                 'psw_Experiment': psw_e,
+                 'prwd_Experiment': prwd_e,
+                 'foodDrop': beta,
                  'consume': rho,
                  'reward': Reward,
                  'groom': groom,
                  'travelCost': travelCost,
                  'pushButtonCost': pushButtonCost,
-                 'prwd_Experiment': prwd_e,
-                 'psw_Experiment': psw_e,
+                 'startPushButtonCost': startPushButtonCost, 
+                 'startPushButtonCost_e': startPushButtonCost_e,
                  'temperature': temperatureQ,
                  'sample_length': sample_length,
                  'sample_number': sample_number
@@ -210,11 +242,11 @@ def twoboxCazettesGenerate(parameters, parametersExp, sample_length, sample_numb
 
     if save:
         # create a file that saves the parameter dictionary using pickle
-        para_output = open(path + '/Results/' + datestring + '_para_twoboxCazettes' + '.pkl', 'wb')
+        para_output = open(path + '/Results/' + datestring + '_para_twoboxCazettes_' + exp_type + '.pkl', 'wb')
         pickle.dump(para_dict, para_output)
         para_output.close()
 
-        data_output = open(path + '/Results/' + datestring + '_dataN_twoboxCazettes' + '.pkl', 'wb')
+        data_output = open(path + '/Results/' + datestring + '_dataN_twoboxCazettes_' + exp_type +  '.pkl', 'wb')
         pickle.dump(data_dict, data_output)
         data_output.close()
 

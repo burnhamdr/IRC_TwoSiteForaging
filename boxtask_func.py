@@ -6,6 +6,70 @@ from math import sqrt
 from scipy.integrate import quad
 from scipy import optimize
 
+def tensorsum_str(A, B):
+    ra, ca = A.shape
+    rb, cb = B.shape
+    C = np.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype for strings
+
+    for i in range(ra):
+        for j in range(ca):
+            for k in range(rb):
+                for l in range(cb):
+                    # Concatenate with '+' for addition
+                    C[i * rb + k, j * cb + l] = f"{A[i, j]} + {B[k, l]}"
+    
+    return C
+
+
+def tensorsumm_str(*args):
+    '''
+    :param args: matrices with string entries
+    :return: returns multidimensional kronecker sum of all matrices in list (strings with "+" as separator)
+    '''
+    z = args[0]
+    for i in range(1, len(args)):
+        z = tensorsum_str(z, args[i])
+
+    return z
+
+def kronn_str(*args):
+    """
+    Returns the multidimensional Kronecker product of all matrices in the argument list,
+    for string-type matrices.
+    """
+    # Start with the first matrix
+    z = args[0]
+    
+    # Iteratively apply the custom Kronecker product function for strings
+    for i in range(1, len(args)):
+        z = kronn_str_pair(z, args[i])  # Use the pairwise kronn_str for each step
+    
+    return z
+
+def kronn_str_pair(A, B):
+    """
+    Performs the Kronecker product for two matrices A and B with string entries.
+    """
+    ra, ca = A.shape
+    rb, cb = B.shape
+    C = np.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype to store strings
+
+    for i in range(ra):
+        for j in range(ca):
+            for k in range(rb):
+                for l in range(cb):
+                    # Concatenate the strings from A and B with '*' in between
+                    C[i * rb + k, j * cb + l] = f"{A[i, j]} * {B[k, l]}"
+
+    return C
+
+def string_meshgrid(*arrays):
+    mesh = np.meshgrid(*arrays, indexing='ij')
+    # Combine the meshgrid arrays element-wise using string concatenation with a space in between
+    concatenated = np.core.defchararray.add(mesh[0], ' ')  # Add space after the first string
+    concatenated = np.core.defchararray.add(concatenated, mesh[1])  # Add the second string
+    return concatenated
+
 def kronn(*args):
     """
     returns multidimensional kronecker product of all matrices in the argument list
@@ -49,121 +113,559 @@ def beliefTransitionMatrix(p_appear, p_disappear, nq, w):
 
     return Tqqq
 
-def beliefTransitionMatrixGaussianCazettes(p_rwd, p_sw, nq, actions, sigma):
+def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, sigma):
     """
     Create transition matrix between nq belief states q to q' WITH action-dependent observations
-    AND action-dependent state transitions.
+    AND location and action-dependent state transitions. In the cazettes foraging task, the boxes
+    are dependent which means the belief state updates are coupled and are BOTH constructed
+    with a single call to this function.
+
     Use Gaussian approximation for diffusion
 
-    Note: convention is site is active in state 0. and inactive in state 1.
-
+    Note: convention is site is active in state 1. and inactive in state 0.
     """
-    def gb(x, k1, k0, p_rwd, p_sw, action):
+    def gb(x, k1, k0, p_sw, belief_location, other_location, action):
         #the belief by convention is of whether the box is ACTIVE, 
         #1 - x is the belief that the box is INACTIVE
-        if action == 4:  # push button action
-            p_off = 1.  # Probability of staying off is 1
-            p_on = 1 - p_sw  # Probability of staying on is 1 - p_sw
-            p_sw_on_off = p_sw  # Probability of switching from on to off
-        else:
-            p_off = 1.
-            p_on = 1.
-            p_sw_on_off = 0.0
-        
+        if belief_location == other_location:#the agent is at this location
+            if action == 2:  # push button action
+                p_off = 1.  # Probability of staying off is 1
+                p_on = 1. - p_sw  # Probability of staying on is 1 - p_sw
+                p_sw_on_off = p_sw  # Probability of switching from on to off
+                # Probability of switching from off to on is 0 because the box is already off
+                # the agent must depart to the active location in order for the current location 
+                # for the box to turn back on
+                p_sw_off_on = 0.0
+            else:
+                p_off = 1.
+                p_on = 1.
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+        else:#the agent is not at this location
+            if action == 2:  # push button action
+                # Probability of staying off is 1 - p_sw, because if it is off, 
+                # and the agent is not at this location, there is a chance p_sw it will turn back on
+                p_off = 1. - p_sw
+                # Probability of staying on is 1 since the agent is not at this location..
+                p_on = 1.
+                # Probability of switching from on to off
+                # no on to off switch can happen if the agent is not there
+                p_sw_on_off = 0.0
+                # Probability of switching from off to on is psw because the 
+                # agent is at the other location making it possible with a probability
+                # p_sw that the other location will turn off and this location will turn on
+                p_sw_off_on = p_sw
+            else:
+                p_off = 1.
+                p_on = 1.
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+
         #calculate the new belief b_{t+1}(s_{t+1}) = (1/c) * P(o_{t+1} | s_{t+1}, a_t) * bhat_{t+1}(s_{t+1})
         #where bhat_{t+1}(s_{t+1}) = \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)
 
         # the probability of the next observation given 
         # that the box is active at that next time step
-        Pot1 = k0
-        # P(s_{t+1}=0 | s_t=0, a_t) * b_t(s_t=1) 
+        Pot1 = k1
+        # P(s_{t+1}=1 | s_t=1, a_t) * b_t(s_t=1) 
         # the probability of the box being active at the next time step given 
         # that it is active at the current time step, times the belief that the box is active
-        Pst0 = p_on * x
-        # P(s_{t+1}=1 | s_t=0, a_t) * b_t(s_t=0) 
+        Pst1 = p_on * x
+        # P(s_{t+1}=1 | s_t=0, a_t) * b_t(s_t=0)
         # the probability of the box being inactive at the next time step given 
         # that it is active at the current time step times the belief that the box is inactive
-        Pst1 = p_sw_on_off * (1 - x)
+        Pst0 = p_sw_off_on * (1 - x)
 
         numerator = Pot1 * (Pst0 + Pst1)# the numerator of the belief update equation
 
         #now calculate the normalization constant..
         # \frac{1}{\sum_{s_{t+1}} P(o_{t+1} | s_{t+1}, a_t) * \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)}
-        # the P(o_{t+1} | s_{t+1}=0, a_t) * P(s_{t+1}=0 | s_t=1, a_t) * b_t(s_t=1)} is 
-        # omitted because the probability of the box switching from off to on is 0.
-        c = k0 * p_on * x + k1 * p_sw_on_off * x + k1 * p_off * (1 - x)
+        c = k1 * p_on * x + k0 * p_sw_on_off * x + k0 * p_off * (1 - x) + k1 * p_sw_off_on * (1 - x)
 
-        bst1 = numerator / c# the new belief state at the next time step
-        return bst1
+        if c == 0.0 and numerator == 0.0:
+            return 0
+        else:
+            bst1 = numerator / c# the new belief state at the next time step
+            return bst1
 
     mu = 0
     dq = 1 / nq # belief resolution
     Ncol = 1  # max color value.. [0, Ncol]
+    
+    #belief locations are the locations where the agent can make observations
+    #about the state of the boxes. So these are locations != 0
+    belief_locations = [l for l in locations if l != 0]
 
-    d = np.zeros((len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
-    den = {action: np.zeros((Ncol + 1, nq, nq)) for action in actions}  # density of the distance
-    xopt = np.zeros((len(actions), Ncol + 1, nq, nq))  # optimal x for each action
-    height = np.zeros((len(actions), Ncol + 1, nq, nq))  # height of the density
-    Trans_belief_obs_approx = {action: np.zeros((Ncol + 1, nq, nq)) for action in actions}  # approximate belief transition matrix
-
-    # Define action-dependent observation emission matrices
-    Obs_emis = {action: np.zeros((Ncol + 1, 2)) for action in actions}
-
+    # Define action and location dependent observation emission matrices
     # Fill Obs_emis based on location-specific actions
-    # by convention obs_emis[action] is NCol x N states. so the probability of each possible observation given the state
+    # by convention obs_emis[action] is NCol x N states.
+    # so the probability of each possible observation given the state
+    Obs_emis = {bloc:{oloc:{action: np.empty((2,2)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
     for action in actions:
-        if action == 4:  # push button
-            Obs_emis[action][1, 0] = 1 - p_rwd# Probability of observing 1 (i.e. box is OFF) when box is actually ON
-            Obs_emis[action][1, 1] = 1.0# Probability of observing 1 (i.e. box is OFF) when box is indeed OFF
-            Obs_emis[action][0, 0] = p_rwd# Probability of observing 0 (i.e. box is ON) when box is indeed ON
-            Obs_emis[action][0, 1] = 0.0# Probability of observing 0 (i.e. box is ON) when box is actually OFF
-        else:
-            Obs_emis[action][:, :] = 0.0  # No observations for other actions
+        for bloc in belief_locations:#belief locations
+            if action == 2:  # push button
+                Obs_emis[bloc][bloc][action][1, 0] = 0.0# Probability of observing 1 (i.e. box is ON) when box is actually OFF
+                Obs_emis[bloc][bloc][action][1, 1] = p_rwd# Probability of observing 1 (i.e. box is ON) when box is indeed ON
+                Obs_emis[bloc][bloc][action][0, 0] = 1.0# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
+                Obs_emis[bloc][bloc][action][0, 1] = 1. - p_rwd# Probability of observing 0 (i.e. box is OFF) when box is actually ON
+                
+                #for the other location, the observation model is inverted. Because we are now considering
+                #the probability of making the observation at the box where the agent is located
+                #given the state of the box at the OTHER location. This enforces the dependence between
+                #the two boxes by essentially creating the inverse observation at the other location.
+                oloc = [l for l in belief_locations if l != bloc][0]
+                Obs_emis[bloc][oloc][action][1, 0] = p_rwd# Probability of observing 1 (i.e. box is ON) when other box is OFF
+                Obs_emis[bloc][oloc][action][1, 1] = 0.0# Probability of observing 1 (i.e. box is ON) when other box is ON
+                Obs_emis[bloc][oloc][action][0, 0] = 1. - p_rwd# Probability of observing 0 (i.e. box is OFF) when other box is OFF
+                Obs_emis[bloc][oloc][action][0, 1] = 1.0# Probability of observing 0 (i.e. box is OFF) when other box is ON
 
-    # Define transition probabilities for states.. but now it's action-dependent
-    # so state transitions only probabilistically happen based on what action is taken
-    Trans_state = {}
+                ## create scenario for equal and opposite observations
+                # p_diff = 2*p_rwd - 1
+                # Obs_emis[bloc][bloc][action][1, 0] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is actually OFF
+                # Obs_emis[bloc][bloc][action][1, 1] = (1 + p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is indeed ON
+                # Obs_emis[bloc][bloc][action][0, 0] = (1 + p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
+                # Obs_emis[bloc][bloc][action][0, 1] = (1 - p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is actually ON
+                # #set the other location to have the opposite observation
+                # oloc = [l for l in belief_locations if l != bloc][0]
+                # # Obs_emis[bloc][oloc][action][1, 0] = (1 + p_diff)/2# Probability of observing 1 (i.e. box is ON) when other box is OFF
+                # # Obs_emis[bloc][oloc][action][1, 1] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when other box is ON
+                # # Obs_emis[bloc][oloc][action][0, 0] = (1 - p_diff)/2# Probability of observing 0 (i.e. box is OFF) when other box is OFF
+                # # Obs_emis[bloc][oloc][action][0, 1] = (1 + p_diff)/2# Probability of observing 0 (i.e. box is OFF) when other box is ON
+                # Obs_emis[bloc][oloc][action] = np.ones_like(Obs_emis[bloc][bloc][action]) / Obs_emis[bloc][bloc][action].shape[0]
+
+                # # there are no observations made. This means
+                # #that the emissions from the observation model should carry no information
+                # #about the state of the box. This equates to a uniform distribution over the
+                # #possible observations for a given world state.
+                # other_locs = [l for l in belief_locations if l != bloc]
+                # for oloc in other_locs:
+                #     Obs_emis[bloc][oloc][action] = np.ones_like(Obs_emis[bloc][bloc][action]) / Obs_emis[bloc][bloc][action].shape[0]
+                #     #Obs_emis[bloc][oloc][action] = np.zeros_like(Obs_emis[bloc][bloc][action])
+            else:
+                #for all other actions, there are no observations made. This means
+                #that the emissions from the observation model should carry no information
+                #about the state of the box. This equates to a uniform distribution over the
+                #possible observations for a given world state.
+                for oloc in belief_locations:#all belief locations..
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2)) / (Ncol + 1)
+                    #Obs_emis[bloc][oloc][action] = np.zeros((Ncol + 1, 2))
+
+    # Define transition probabilities for states.. but now it's action-dependent AND location-dependent
+    # so state transitions only probabilistically happen based on what action is taken and 
+    # where the action is taken.
+    Trans_state = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
     for action in actions:
-        if action == 4:  # push button action
-            Trans_state[action] = np.array([[1 - p_sw, 0.0],  # Probability of staying on/off or switching
-                                            [p_sw, 1.0]])
-        else:
-            Trans_state[action] = np.array([[1, 0],  # Identity matrix (no transition)
-                                            [0, 1]])
+        for bloc in belief_locations:#belief locations
+            if action == 2:  # push button action
+                #the state transition matrix for the location where the button is pressed
+                Trans_state[bloc][bloc][action] = np.array([[1.0, p_sw],  # Probability of staying on/off or switching
+                                                            [0.0, 1 - p_sw]])
+                #for all other locations...
+                #the probability of transitioning between states is the inverse 
+                #of the transition probability matrix of the location where the button is pressed
+                other_locs = [l for l in belief_locations if l != bloc]
+                for oloc in other_locs:
+                    Trans_state[bloc][oloc][action] = np.array([[1. - p_sw, 0.0],
+                                                                [p_sw, 1.0]])
+            else:
+                for oloc in belief_locations:
+                    Trans_state[bloc][oloc][action] = np.array([[1, 0],  # Identity matrix (no transition)
+                                                                [0, 1]])
+
+    d = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
+    xopt = np.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action
+    height = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # height of the density
+    
+    # approximate belief transition matrix
+    Trans_belief_obs_approx = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    # obseration emission transition matrix
+    Obs_emis_trans = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    # gaussian belief state densities
+    den = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+
     # for each action and next observation pair the goal is to project or translate the 
     # joint probability of observations and state transitions into a discrete space of belief states.
-    for a_index, action in enumerate(actions):#for each possible current action
-        if action == 4:  # push button action
-            for n in range(Ncol + 1):# for each possible next observation
-                k0 = Obs_emis[action][n, 0]# probability of observing n given that the the box is active 
-                k1 = Obs_emis[action][n, 1]# probability of observing n given that the the box is inactive
-                for i in range(nq):
-                    for j in range(nq):
-                        # Approximate the probability with Gaussian approximation
-                        q = i * dq + dq / 2  # past belief (along columns, index with i)
-                        qq = j * dq + dq / 2  # new belief (along rows, index with j)
+    for b_index, bloc in enumerate(belief_locations):#belief states
+        for o_index, oloc in enumerate(belief_locations):#all action locations
+            for a_index, action in enumerate(actions):#for each possible current action
+                # if action == 4:  # push button action
+                for n in range(Ncol + 1):# for each possible next observation
+                    k0 = Obs_emis[bloc][oloc][action][n, 0]# probability of observing n given that the the box is INACTIVE 
+                    k1 = Obs_emis[bloc][oloc][action][n, 1]# probability of observing n given that the the box is ACTIVE
+                    for i in range(nq):
+                        for j in range(nq):
+                            # Approximate the probability with Gaussian approximation
+                            q = i * dq + dq / 2  # past belief (along columns, index with i)
+                            qq = j * dq + dq / 2  # new belief (along rows, index with j)
 
-                        def dist(x):
-                            # the distance of (x, gb(x)) to the center of each bin
-                            return sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_rwd, p_sw, action)) ** 2)
+                            def dist(x):
+                                # the distance of (x, gb(x)) to the center of each bin
+                                return sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_sw, bloc, oloc, action)) ** 2)
 
-                        xopt[a_index, n, j, i], d[a_index, n, j, i] = optimize.fminbound(dist, 0, 1, full_output=1)[0:2]
-                        den[action][n, j, i] = norm.pdf(d[a_index, n, j, i], mu, sigma)  # use this to approximate delta function with diffusion
+                            #find a value xopt between 0 and 1 that when advanced to the next time step using
+                            #the belief update function gb, (xopt, gb(xopt)) is the closest point to (q, qq). 
+                            xopt[b_index, o_index, a_index, n, j, i], d[b_index, o_index, a_index, n, j, i] = optimize.fminbound(dist, 0, 1, full_output=1)[0:2]
+                            
+                            #den is the density of the distance between the optimal belief state and the actual belief state
+                            #this represents the approximation error of the 
+                            den[bloc][oloc][action][n, j, i] = norm.pdf(d[b_index, o_index, a_index, n, j, i], mu, sigma)  # use this to approximate delta function with diffusion
+                            
+                            #height is O(o_t+1 | b_t, a_t) which is the product of
+                            #the expectation of the observation over states and the expectation of the state transition over states
+                            #and the expectation of the belief over states
+                            height[b_index, o_index, a_index, n, j, i] = Obs_emis[bloc][oloc][action][n, :].dot(Trans_state[bloc][oloc][action]).dot(np.array([1 - q, q]))#.dot(np.array([xopt[a_index,n, j, i], 1 - xopt[a_index,n, j, i]]))#
+                    
+                    #this divides every element in the density by its column sum which normalizes
+                    #the density to a transition probability.. this is P(b_t+1 | b_t, a_t, o_t+1)
+                    den[bloc][oloc][action][n, :, :] /= np.tile(np.sum(den[bloc][oloc][action][n, :, :], 0), (nq, 1))
+                    #trans_belief_obs_approx is the approximate belief transition matrix for each observation
+                    #which is the product of P(b_t+1 | b_t, a_t, o_t+1) and O(o_t+1 | b_t, a_t). In the math
+                    #to get the belief transition matrix, we need to sum over all possible next observations.
+                    # if action == 4:
+                    Trans_belief_obs_approx[bloc][oloc][action][n, :, :] = np.multiply(den[bloc][oloc][action][n, :, :], height[b_index, o_index, a_index, n, :, :])
+                    # else:
+                        # Trans_belief_obs_approx[action][n, :, :] = np.multiply(den[action][n, :, :], np.identity(nq))
 
-                        height[a_index, n, j, i] = Obs_emis[action][n, :].dot(Trans_state[action]).dot(np.array([1 - q, q]))
+                    Obs_emis_trans[bloc][oloc][action] = Obs_emis[bloc][oloc][action].dot(Trans_state[bloc][oloc][action])
+                # else:
+                #     # for all other actions, the observation is always 0
+                #     # so optimizing x is not necessary, the belief states deterministically
+                #     # transition to the same belief state.
+                #     for n in range(Ncol + 1):
+                #         den[action][n, :, :] = np.identity(nq)
+                #         Trans_belief_obs_approx[action][n, :, :] = np.identity(nq)
 
-                den[action][n, :, :] /= np.tile(np.sum(den[action][n, :, :], 0), (nq, 1))
-                Trans_belief_obs_approx[action][n, :, :] = np.multiply(den[action][n, :, :], height[a_index, n, :, :])
+    return Trans_belief_obs_approx, Obs_emis_trans, den
+
+def beliefTransitionMatrixGaussianCazettesIndependent(p_sw, p_rwd, nq, actions, locations, sigma):
+    """
+    create transition matrix between nq belief states q to q' WITH color observation
+    use Gaussian approximation for diffusion
+    """
+    def gb(x, k1, k0, p_sw, belief_location, other_location, action):
+        #the belief by convention is of whether the box is ACTIVE, 
+        #1 - x is the belief that the box is INACTIVE
+        p_off = 1. - p_sw
+        p_on = 1. - p_sw
+        p_sw_on_off = p_sw
+        p_sw_off_on = p_sw
+
+        #calculate the new belief b_{t+1}(s_{t+1}) = (1/c) * P(o_{t+1} | s_{t+1}, a_t) * bhat_{t+1}(s_{t+1})
+        #where bhat_{t+1}(s_{t+1}) = \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)
+
+        # the probability of the next observation given 
+        # that the box is active at that next time step
+        Pot1 = k1
+        # P(s_{t+1}=1 | s_t=1, a_t) * b_t(s_t=1) 
+        # the probability of the box being active at the next time step given 
+        # that it is active at the current time step, times the belief that the box is active
+        Pst1 = p_on * x
+        # P(s_{t+1}=1 | s_t=0, a_t) * b_t(s_t=0)
+        # the probability of the box being inactive at the next time step given 
+        # that it is active at the current time step times the belief that the box is inactive
+        Pst0 = p_sw_off_on * (1 - x)
+
+        numerator = Pot1 * (Pst0 + Pst1)# the numerator of the belief update equation
+
+        #now calculate the normalization constant..
+        # \frac{1}{\sum_{s_{t+1}} P(o_{t+1} | s_{t+1}, a_t) * \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)}
+        c = k1 * p_on * x + k0 * p_sw_on_off * x + k0 * p_off * (1 - x) + k1 * p_sw_off_on * (1 - x)
+
+        if c == 0.0 and numerator == 0.0:
+            return 0
         else:
-            # for all other actions, the observation is always 0
-            # so optimizing x is not necessary, the belief states deterministically
-            # transition to the same belief state.
-            for n in range(Ncol + 1):
-                den[action][n, :, :] = np.identity(nq)
-                Trans_belief_obs_approx[action][n, :, :] = np.identity(nq)
+            bst1 = numerator / c# the new belief state at the next time step
+            return bst1
 
-    return Trans_belief_obs_approx, {action: Obs_emis[action].dot(Trans_state[action]) for action in actions}, den
+    mu = 0
+    dq = 1 / nq # belief resolution
+    Ncol = 1  # max color value.. [0, Ncol]
+    
+    #belief locations are the locations where the agent can make observations
+    #about the state of the boxes. So these are locations != 0
+    belief_locations = locations#[l for l in locations if l != 0]
 
+    # Define action and location dependent observation emission matrices
+    # Fill Obs_emis based on location-specific actions
+    # by convention obs_emis[action] is NCol x N states. 
+    # so the probability of each possible observation given the state
+    Obs_emis = {bloc:{oloc:{action: np.empty((2,2)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    for action in actions:
+        for bloc in belief_locations:#belief locations
+            if action == 2 and bloc != 0:  # push button at location other than intermediate location 0
+                Obs_emis[bloc][bloc][action][1, 0] = 0.0# Probability of observing 1 (i.e. box is ON) when box is actually OFF
+                Obs_emis[bloc][bloc][action][1, 1] = p_rwd# Probability of observing 1 (i.e. box is ON) when box is indeed ON
+                Obs_emis[bloc][bloc][action][0, 0] = 1.0# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
+                Obs_emis[bloc][bloc][action][0, 1] = 1. - p_rwd# Probability of observing 0 (i.e. box is OFF) when box is actually ON
+                
+                #for the other location
+                #there are no observations made. This means
+                #that the emissions from the observation model should carry no information
+                #about the state of the box. This equates to a uniform distribution over the
+                #possible observations for a given world state.
+                other_locs = [l for l in belief_locations if l != bloc]
+                for oloc in other_locs:
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2)) / (Ncol + 1)
+            else:
+                #for all other actions, there are no observations made. This means
+                #that the emissions from the observation model should carry no information
+                #about the state of the box. This equates to a uniform distribution over the
+                #possible observations for a given world state.
+                for oloc in belief_locations:#all belief locations..
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2)) / (Ncol + 1)
+
+    # Define transition probabilities for states.. but now it's action-dependent AND location-dependent
+    # so state transitions only probabilistically happen based on what action is taken and 
+    # where the action is taken.
+    Trans_state = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    for action in actions:
+        for bloc in belief_locations:#belief locations
+            for oloc in belief_locations:#belief locations
+                #the state transition matrix at every location and for every action
+                Trans_state[bloc][oloc][action] = np.array([[1 - p_sw, p_sw],  # Probability of staying on/off or switching
+                                                            [p_sw, 1 - p_sw]])
+
+    d = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
+    xopt = np.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action
+    height = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # height of the density
+    
+    # approximate belief transition matrix
+    Trans_belief_obs_approx = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    # obseration emission transition matrix
+    Obs_emis_trans = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    # gaussian belief state densities
+    den = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+
+    # for each action and next observation pair the goal is to project or translate the 
+    # joint probability of observations and state transitions into a discrete space of belief states.
+    for b_index, bloc in enumerate(belief_locations):#belief states
+        for o_index, oloc in enumerate(belief_locations):#all action locations
+            for a_index, action in enumerate(actions):#for each possible current action
+                # if action == 4:  # push button action
+                for n in range(Ncol + 1):# for each possible next observation
+                    k0 = Obs_emis[bloc][oloc][action][n, 0]# probability of observing n given that the the box is INACTIVE 
+                    k1 = Obs_emis[bloc][oloc][action][n, 1]# probability of observing n given that the the box is ACTIVE
+                    for i in range(nq):
+                        for j in range(nq):
+                            # Approximate the probability with Gaussian approximation
+                            q = i * dq + dq / 2  # past belief (along columns, index with i)
+                            qq = j * dq + dq / 2  # new belief (along rows, index with j)
+
+                            def dist(x):
+                                # the distance of (x, gb(x)) to the center of each bin
+                                return sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_sw, bloc, oloc, action)) ** 2)
+
+                            #find a value xopt between 0 and 1 that when advanced to the next time step using
+                            #the belief update function gb, (xopt, gb(xopt)) is the closest point to (q, qq). 
+                            xopt[b_index, o_index, a_index, n, j, i], d[b_index, o_index, a_index, n, j, i] = optimize.fminbound(dist, 0, 1, full_output=1)[0:2]
+                            
+                            #den is the density of the distance between the optimal belief state and the actual belief state
+                            #this represents the approximation error of the 
+                            den[bloc][oloc][action][n, j, i] = norm.pdf(d[b_index, o_index, a_index, n, j, i], mu, sigma)  # use this to approximate delta function with diffusion
+                            
+                            #height is O(o_t+1 | b_t, a_t) which is the product of
+                            #the expectation of the observation over states and the expectation of the state transition over states
+                            #and the expectation of the belief over states
+                            height[b_index, o_index, a_index, n, j, i] = Obs_emis[bloc][oloc][action][n, :].dot(Trans_state[bloc][oloc][action]).dot(np.array([1 - q, q]))#.dot(np.array([xopt[a_index,n, j, i], 1 - xopt[a_index,n, j, i]]))#
+
+                    #this divides every element in the density by its column sum which normalizes
+                    #the density to a transition probability.. this is P(b_t+1 | b_t, a_t, o_t+1)
+                    den[bloc][oloc][action][n, :, :] /= np.tile(np.sum(den[bloc][oloc][action][n, :, :], 0), (nq, 1))
+                    #trans_belief_obs_approx is the approximate belief transition matrix for each observation
+                    #which is the product of P(b_t+1 | b_t, a_t, o_t+1) and O(o_t+1 | b_t, a_t). In the math
+                    #to get the belief transition matrix, we need to sum over all possible next observations.
+                    # if action == 4:
+                    Trans_belief_obs_approx[bloc][oloc][action][n, :, :] = np.multiply(den[bloc][oloc][action][n, :, :], height[b_index, o_index, a_index, n, :, :])
+                    # else:
+                        # Trans_belief_obs_approx[action][n, :, :] = np.multiply(den[action][n, :, :], np.identity(nq))
+
+                    Obs_emis_trans[bloc][oloc][action] = Obs_emis[bloc][oloc][action].dot(Trans_state[bloc][oloc][action])
+                # else:
+                #     # for all other actions, the observation is always 0
+                #     # so optimizing x is not necessary, the belief states deterministically
+                #     # transition to the same belief state.
+                #     for n in range(Ncol + 1):
+                #         den[action][n, :, :] = np.identity(nq)
+                #         Trans_belief_obs_approx[action][n, :, :] = np.identity(nq)
+
+    return Trans_belief_obs_approx, Obs_emis_trans, den
+
+def beliefTransitionMatrixGaussianCazettesIndependentDependent(p_sw, p_rwd, nq, actions, locations, sigma):
+    """
+    create transition matrix between nq belief states q to q' WITH color observation
+    use Gaussian approximation for diffusion
+    """
+    def gb(x, k1, k0, p_sw, belief_location, other_location, action):
+        #the belief by convention is of whether the box is ACTIVE, 
+        #1 - x is the belief that the box is INACTIVE
+        if belief_location == other_location:#the agent is at this location
+            if action == 2:  # push button action
+                p_off = 1. - p_sw  # Probability of staying off is 1
+                p_on = 1. - p_sw  # Probability of staying on is 1 - p_sw
+                p_sw_on_off = p_sw  # Probability of switching from on to off
+                p_sw_off_on = p_sw
+            else:
+                p_off = 1.
+                p_on = 1.
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+        else:#the agent is not at this location
+                p_off = 1.
+                p_on = 1.
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+
+        #calculate the new belief b_{t+1}(s_{t+1}) = (1/c) * P(o_{t+1} | s_{t+1}, a_t) * bhat_{t+1}(s_{t+1})
+        #where bhat_{t+1}(s_{t+1}) = \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)
+
+        # the probability of the next observation given
+        # that the box is active at that next time step
+        Pot1 = k1
+        # P(s_{t+1}=1 | s_t=1, a_t) * b_t(s_t=1)
+        # the probability of the box being active at the next time step given
+        # that it is active at the current time step, times the belief that the box is active
+        Pst1 = p_on * x
+        # P(s_{t+1}=1 | s_t=0, a_t) * b_t(s_t=0)
+        # the probability of the box being inactive at the next time step given
+        # that it is active at the current time step times the belief that the box is inactive
+        Pst0 = p_sw_off_on * (1 - x)
+
+        numerator = Pot1 * (Pst0 + Pst1)# the numerator of the belief update equation
+
+        #now calculate the normalization constant..
+        # \frac{1}{\sum_{s_{t+1}} P(o_{t+1} | s_{t+1}, a_t) * \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)}
+        c = k1 * p_on * x + k0 * p_sw_on_off * x + k0 * p_off * (1 - x) + k1 * p_sw_off_on * (1 - x)
+
+        if c == 0.0 and numerator == 0.0:
+            return 0
+        else:
+            bst1 = numerator / c# the new belief state at the next time step
+            return bst1
+
+    mu = 0
+    dq = 1 / nq # belief resolution
+    Ncol = 1  # max color value.. [0, Ncol]
+    
+    #belief locations are the locations where the agent can make observations
+    #about the state of the boxes. So these are locations != 0
+    belief_locations = locations#[l for l in locations if l != 0]
+
+    # Define action and location dependent observation emission matrices
+    # Fill Obs_emis based on location-specific actions
+    # by convention obs_emis[action] is NCol x N states. 
+    # so the probability of each possible observation given the state
+    Obs_emis = {bloc:{oloc:{action: np.empty((2,2)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    for action in actions:
+        for bloc in belief_locations:#belief locations
+            if action == 2 and bloc != 0:  # push button at location other than intermediate location 0
+                p_diff = 2*p_rwd - 1
+                Obs_emis[bloc][bloc][action][1, 0] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is actually OFF
+                Obs_emis[bloc][bloc][action][1, 1] = (1 + p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is indeed ON
+                Obs_emis[bloc][bloc][action][0, 0] = (1 + p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
+                Obs_emis[bloc][bloc][action][0, 1] = (1 - p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is actually ON
+                
+                #for the other location
+                #there are no observations made. This means
+                #that the emissions from the observation model should carry no information
+                #about the state of the box. This equates to a uniform distribution over the
+                #possible observations for a given world state.
+                other_locs = [l for l in belief_locations if l != bloc]
+                for oloc in other_locs:
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2)) / (Ncol + 1)
+            else:
+                #for all other actions, there are no observations made. This means
+                #that the emissions from the observation model should carry no information
+                #about the state of the box. This equates to a uniform distribution over the
+                #possible observations for a given world state.
+                for oloc in belief_locations:#all belief locations..
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2)) / (Ncol + 1)
+
+    # Define transition probabilities for states.. but now it's action-dependent AND location-dependent
+    # so state transitions only probabilistically happen based on what action is taken and 
+    # where the action is taken.
+    Trans_state = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    for action in actions:
+        for bloc in belief_locations:#belief locations
+            if action == 2:  # push button action
+                #the state transition matrix for the location where the button is pressed
+                Trans_state[bloc][bloc][action] = np.array([[1 - p_sw, p_sw],
+                                                            [p_sw, 1 - p_sw]])
+                #for all other locations...
+                #the probability of transitioning between states is the inverse 
+                #of the transition probability matrix of the location where the button is pressed
+                other_locs = [l for l in belief_locations if l != bloc]
+                for oloc in other_locs:
+                    Trans_state[bloc][oloc][action] = np.array([[1., 0.0],
+                                                                [0.0, 1.0]])
+            else:
+                for oloc in belief_locations:
+                    Trans_state[bloc][oloc][action] = np.array([[1., 0.],  # Identity matrix (no transition)
+                                                                [0., 1.]])
+
+    d = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
+    xopt = np.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action
+    height = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # height of the density
+    
+    # approximate belief transition matrix
+    Trans_belief_obs_approx = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    # obseration emission transition matrix
+    Obs_emis_trans = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    # gaussian belief state densities
+    den = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+
+    # for each action and next observation pair the goal is to project or translate the 
+    # joint probability of observations and state transitions into a discrete space of belief states.
+    for b_index, bloc in enumerate(belief_locations):#belief states
+        for o_index, oloc in enumerate(belief_locations):#all action locations
+            for a_index, action in enumerate(actions):#for each possible current action
+                # if action == 4:  # push button action
+                for n in range(Ncol + 1):# for each possible next observation
+                    k0 = Obs_emis[bloc][oloc][action][n, 0]# probability of observing n given that the the box is INACTIVE 
+                    k1 = Obs_emis[bloc][oloc][action][n, 1]# probability of observing n given that the the box is ACTIVE
+                    for i in range(nq):
+                        for j in range(nq):
+                            # Approximate the probability with Gaussian approximation
+                            q = i * dq + dq / 2  # past belief (along columns, index with i)
+                            qq = j * dq + dq / 2  # new belief (along rows, index with j)
+
+                            def dist(x):
+                                # the distance of (x, gb(x)) to the center of each bin
+                                return sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_sw, bloc, oloc, action)) ** 2)
+
+                            #find a value xopt between 0 and 1 that when advanced to the next time step using
+                            #the belief update function gb, (xopt, gb(xopt)) is the closest point to (q, qq). 
+                            xopt[b_index, o_index, a_index, n, j, i], d[b_index, o_index, a_index, n, j, i] = optimize.fminbound(dist, 0, 1, full_output=1)[0:2]
+                            
+                            #den is the density of the distance between the optimal belief state and the actual belief state
+                            #this represents the approximation error of the 
+                            den[bloc][oloc][action][n, j, i] = norm.pdf(d[b_index, o_index, a_index, n, j, i], mu, sigma)  # use this to approximate delta function with diffusion
+                            
+                            #height is O(o_t+1 | b_t, a_t) which is the product of
+                            #the expectation of the observation over states and the expectation of the state transition over states
+                            #and the expectation of the belief over states
+                            height[b_index, o_index, a_index, n, j, i] = Obs_emis[bloc][oloc][action][n, :].dot(Trans_state[bloc][oloc][action]).dot(np.array([1 - q, q]))#.dot(np.array([xopt[a_index,n, j, i], 1 - xopt[a_index,n, j, i]]))#
+
+                    #this divides every element in the density by its column sum which normalizes
+                    #the density to a transition probability.. this is P(b_t+1 | b_t, a_t, o_t+1)
+                    den[bloc][oloc][action][n, :, :] /= np.tile(np.sum(den[bloc][oloc][action][n, :, :], 0), (nq, 1))
+                    #trans_belief_obs_approx is the approximate belief transition matrix for each observation
+                    #which is the product of P(b_t+1 | b_t, a_t, o_t+1) and O(o_t+1 | b_t, a_t). In the math
+                    #to get the belief transition matrix, we need to sum over all possible next observations.
+                    # if action == 4:
+                    Trans_belief_obs_approx[bloc][oloc][action][n, :, :] = np.multiply(den[bloc][oloc][action][n, :, :], height[b_index, o_index, a_index, n, :, :])
+                    # else:
+                        # Trans_belief_obs_approx[action][n, :, :] = np.multiply(den[action][n, :, :], np.identity(nq))
+
+                    Obs_emis_trans[bloc][oloc][action] = Obs_emis[bloc][oloc][action].dot(Trans_state[bloc][oloc][action])
+                # else:
+                #     # for all other actions, the observation is always 0
+                #     # so optimizing x is not necessary, the belief states deterministically
+                #     # transition to the same belief state.
+                #     for n in range(Ncol + 1):
+                #         den[action][n, :, :] = np.identity(nq)
+                #         Trans_belief_obs_approx[action][n, :, :] = np.identity(nq)
+
+    return Trans_belief_obs_approx, Obs_emis_trans, den
 
 def beliefTransitionMatrixGaussian(p_appear, p_disappear, nq, sigma = 0.1):
     """
@@ -210,8 +712,14 @@ def beliefTransitionMatrixGaussianCol(p_appear, p_disappear, qmin, qmax, Ncol, n
     Trans_state = np.array([[1 - p_appear, p_disappear],
                             [p_appear, 1 - p_disappear]])
     Obs_emis = np.zeros((Ncol + 1, 2))  # Observation(color) generation,
-    Obs_emis[:, 0] = binom.pmf(range(Ncol + 1), Ncol, qmax)# Probabilities when the box is active
-    Obs_emis[:, 1] = binom.pmf(range(Ncol + 1), Ncol, qmin)# Probabilities when the box is inactive
+
+    #from the paper:
+    #Color values for both boxes are drawn independently at each time from a binomial distribution 
+    #with five states, with mean q∗1 = 0.4 when food is available in the box, and q∗2 = 0.6 otherwise.
+    #this means that Obs_emis[:,0] are emissions for the box being inactive and Obs_emis[:,1] are 
+    #emissions for the box being active.
+    Obs_emis[:, 0] = binom.pmf(range(Ncol + 1), Ncol, qmax)# Probabilities when the box is INACTIVE
+    Obs_emis[:, 1] = binom.pmf(range(Ncol + 1), Ncol, qmin)# Probabilities when the box is ACTIVE
 
     dq = 1 / nq
 
@@ -222,8 +730,8 @@ def beliefTransitionMatrixGaussianCol(p_appear, p_disappear, qmin, qmax, Ncol, n
     Trans_belief_obs_approx = np.zeros((Ncol + 1, nq, nq))# approximate belief transition matrix
 
     for n in range(Ncol + 1):
-        k0 = Obs_emis[n, 0]# probability of observing the box is active
-        k1 = Obs_emis[n, 1]# probability of observing the box is inactive
+        k0 = Obs_emis[n, 0]# probability of observing the box is INACTIVE
+        k1 = Obs_emis[n, 1]# probability of observing the box is ACTIVE
 
         for i in range(nq):
             for j in range(nq):

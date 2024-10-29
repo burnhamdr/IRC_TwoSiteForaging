@@ -29,7 +29,7 @@ def _computeDimensions(transition):
 
 class MDP(object):
 
-    def __init__(self, transitions, reward, discount, epsilon, max_iter):
+    def __init__(self, transitions, reward, discount, epsilon, max_iter, mask=None):
         # Initialise a MDP based on the input parameters.
 
         # if the discount is None then the algorithm is assumed to not use it
@@ -70,6 +70,8 @@ class MDP(object):
         self.V = None
         # policy can also be stored as a vector
         self.policy = None
+        # allow action masking
+        self.actionMask = mask
 
     def __repr__(self):
         P_repr = "P: \n"
@@ -98,6 +100,12 @@ class MDP(object):
                     "right shape (Bellman operator)."
             except AttributeError:
                 raise TypeError("V must be a numpy array or matrix.")
+        if self.actionMask is None:
+            mask = _np.ones((self.A, self.S))
+        else:
+            mask = self.actionMask
+            assert mask.shape == (self.A, self.S), "Mask is not the right shape."
+
         # Looping through each action the the Q-value matrix is calculated.
         # P and V can be any object that supports indexing, so it is important
         # that you know they define a valid MDP before calling the
@@ -105,6 +113,8 @@ class MDP(object):
         Q = _np.empty((self.A, self.S))
         for aa in range(self.A):
             Q[aa] = self.R[aa] + self.discount * self.P[aa].dot(V)
+        #apply mask
+        masked_Q = _np.where(mask, Q, -_np.inf)  # Replace unavailable actions with -inf
         # Get the policy and value, for now it is being returned but...
         # Which way is better?
         # 1. Return, (policy, value)
@@ -133,6 +143,11 @@ class MDP(object):
                     "right shape (Bellman operator)."
             except AttributeError:
                 raise TypeError("V must be a numpy array or matrix.")
+        if self.actionMask is None:
+            mask = _np.ones((self.A, self.S))
+        else:
+            mask = self.actionMask
+            assert mask.shape == (self.A, self.S), "Mask is not the right shape."
         # Looping through each action the the Q-value matrix is calculated.
         # P and V can be any object that supports indexing, so it is important
         # that you know they define a valid MDP before calling the
@@ -140,17 +155,30 @@ class MDP(object):
         Q = _np.empty((self.A, self.S))
         for aa in range(self.A):
             Q[aa] = self.R[aa] + self.discount * self.P[aa].dot(V)
+        #apply mask
+        masked_Q = _np.where(mask, Q, -_np.inf)
         # Get the policy and value, for now it is being returned but...
         # Which way is better?
         # 1. Return, (policy, value)
+        max_float64 = _np.finfo(_np.float64).max
 
         expo = _np.zeros(Q.shape)
         softpolicy = _np.zeros(Q.shape)
         for i in range(self.S):
-            expo[:, i] = _np.exp(Q[:, i] / temperature)
-            expo[:, i] = expo[:, i] / _np.max(expo[:, i])    # divide all the exp value with the max,
-                                                             # allow the softpolicy approximate the optimal policy closely
-            softpolicy[:, i] = expo[:, i] / _np.sum(expo[:, i])
+            # Apply the mask by only considering valid actions (non -inf)
+            valid_Q = masked_Q[:, i]
+
+            # Subtract the maximum to stabilize the softmax calculation (avoid overflow)
+            max_Q = _np.max(valid_Q[valid_Q > -_np.inf])  # Find the max among available actions
+            exp_vals = _np.exp((valid_Q - max_Q) / temperature) * mask[:, i]  # Apply mask to exponentials
+            
+            # Normalize only over the available actions (ignore masked ones)
+            exp_sum = _np.sum(exp_vals)
+            if exp_sum > 0:
+                softpolicy[:, i] = exp_vals / exp_sum
+            else:
+                softpolicy[:, i] = 0  # No available actions, or all exp_vals were zero
+        
 
         return (softpolicy, _np.sum(Q * softpolicy, axis = 0))
         # 2. update self.policy and self.V directly
@@ -350,10 +378,10 @@ class ValueIteration_sfmZW(MDP):
     """
 
     def __init__(self, transitions, reward, discount, epsilon= 10 ** -6,
-                 max_iter = 1000, initial_value=0):
+                 max_iter = 1000, initial_value=0, mask=None):
         # Initialise a value iteration MDP.
 
-        MDP.__init__(self, transitions, reward, discount, epsilon, max_iter)
+        MDP.__init__(self, transitions, reward, discount, epsilon, max_iter, mask)
 
         # initialization of optional arguments
         if initial_value == 0:
@@ -413,7 +441,7 @@ class ValueIteration_sfmZW(MDP):
         Vprev = self.V
         null, value = self._bellmanOperator()
         # p 201, Proposition 6.6.5
-        span = _util.getSpan(value - Vprev)
+        span = _util.getSpan(value - Vprev) + 1E-8
         max_iter = (_math.log((epsilon * (1 - self.discount) / self.discount) /
                     span ) / _math.log(self.discount * k))
         #self.V = Vprev
@@ -582,10 +610,10 @@ class ValueIteration_opZW(MDP):
     """
 
     def __init__(self, transitions, reward, discount, epsilon=0.01,
-                 max_iter=1000, initial_value=0):
+                 max_iter=1000, initial_value=0, mask=None):
         # Initialise a value iteration MDP.
 
-        MDP.__init__(self, transitions, reward, discount, epsilon, max_iter)
+        MDP.__init__(self, transitions, reward, discount, epsilon, max_iter, mask)
 
         # initialization of optional arguments
         if initial_value == 0:
@@ -645,7 +673,7 @@ class ValueIteration_opZW(MDP):
         Vprev = self.V
         null, value = self._bellmanOperator()
         # p 201, Proposition 6.6.5
-        span = _util.getSpan(value - Vprev)
+        span = _util.getSpan(value - Vprev) + 1E-8
         max_iter = (_math.log((epsilon * (1 - self.discount) / self.discount) /
                     span ) / _math.log(self.discount * k))
         #self.V = Vprev

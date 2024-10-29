@@ -95,20 +95,21 @@ class twoboxColMDP:
         self.ThA[g2, :, :] = kronn(Tl2, Tb1, Tr, Tb2)
 
         # ACTION: push button
-        bL = (np.array(range(self.nq)) + 1 / 2) / self.nq# belief states
+        bL = (np.array(range(self.nq)) + 1 / 2) / self.nq
 
         #I think this is a combination of the Tr and Tb2 matrices because the size
         #would mostly work out. if you were to take the kronecker product of Tr and Tb2.
         #this also seems to be what the name suggests. It also seems to be accounting
         #for the removal of the reward from the box after the button is pressed if there
         #is any reward in the box.
+        beta=0.1
         Trb2 = np.concatenate((np.array([np.insert(np.zeros(self.nq), 0, 1 - bL)]),
                                np.zeros((self.nq - 2, 2 * self.nq)),
                                np.array([np.insert([np.zeros(self.nq)], 0, beta * bL)]),
                                np.array([np.insert([(1 - beta) * bL], self.nq, 1 - bL)]),
                                np.zeros(((self.nq - 2), 2 * self.nq)),
                                np.array([np.insert([np.zeros(self.nq)], self.nq, bL)])), axis=0)
-        Tb1r = reversekron(Trb2, np.array([2, self.nq]))
+        Tb1r = reversekron(Trb2, np.array([2, self.nq])) #Tb1 reverse.. figuring out what Tb1 must have been from Trb2 with the reset
         Th = block_diag(np.identity(self.nq * self.nr * self.nq),
                         np.kron(Tb1r, np.identity(self.nq)),
                         np.kron(np.identity(self.nq), Trb2))
@@ -278,8 +279,6 @@ class twoboxColMDPdata(twoboxColMDP):
                         self.belief2Dist[n, t] = self.den2[self.color2[n, t], :, self.belief2[n, t - 1]]
                         self.belief2[n, t] = np.argmax(np.random.multinomial(1, self.belief2Dist[n, t], size=1))
 
-
-
                         if self.reward[n, t - 1] == 0:
                             self.reward[n, t] = 0
                         else:
@@ -307,7 +306,6 @@ class twoboxColMDPdata(twoboxColMDP):
                         if self.location[n, t - 1] == 0:
                             # pressing button at the center does not change anything
                             # then wait an intermediate step (everything evolves as if doing nothing)
-
                             self.reward[n, t] = 0
 
                             if self.trueState1[n, t - 1] == 0:
@@ -330,7 +328,7 @@ class twoboxColMDPdata(twoboxColMDP):
                             self.belief1[n, t] = np.argmax(np.random.multinomial(1, self.belief1Dist[n, t],size=1))
                             self.belief2[n, t] = np.argmax(np.random.multinomial(1, self.belief2Dist[n, t], size=1))
 
-                        if self.location[n, t] == 1:  # consider location 1 case
+                        if self.location[n, t - 1] == 1:  # consider location 1 case
 
                             if self.trueState1[n, t - 1] == 0:
                                 if self.reward[n, t - 1] == 0:  # reward depends on previous time frame
@@ -359,7 +357,7 @@ class twoboxColMDPdata(twoboxColMDP):
                             self.belief2Dist[n, t] = self.den2[self.color2[n, t], :, self.belief2[n, t - 1]]
                             self.belief2[n, t] = np.argmax(np.random.multinomial(1, self.belief2Dist[n, t], size=1))
 
-                        if self.location[n, t] == 2:  # consider location 2 case
+                        if self.location[n, t - 1] == 2:  # consider location 2 case
 
                             if self.trueState2[n, t - 1] == 0:
                                 if self.reward[n, t - 1] == 0:  # reward depends on previous time frame
