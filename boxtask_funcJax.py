@@ -1,25 +1,65 @@
 from __future__ import division
 import numpy as np
-from scipy.linalg import toeplitz, expm
-from scipy.stats import norm, binom
+from jax.scipy.stats import norm, binom
 from math import sqrt
-from scipy.integrate import quad
 from scipy import optimize
+import jax.numpy as jnp
+import jax
+from jax import vmap, pmap
+from pprint import pprint
+from jax.lib import xla_bridge
+import jaxlib
+from jax import jit
+import jax.lax as lax
+
+def compare_nested_dicts(dict1, dict2, rel_tol=1e-7, abs_tol=1e-8):
+    """
+    Compare two dictionaries with numpy arrays as values and identical key structures.
+    
+    Parameters:
+    dict1, dict2 : dict
+        Dictionaries with the same key structure. Values are numpy arrays of the same shape.
+    rel_tol : float
+        Relative difference tolerance.
+    abs_tol : float
+        Absolute difference tolerance.
+    
+    Returns:
+    None
+    """
+    def recursive_compare(d1, d2, key_path=[]):
+        if isinstance(d1, dict):
+            for key in d1:
+                recursive_compare(d1[key], d2[key], key_path + [key])
+        else:  # Base case: d1 and d2 are numpy arrays
+            mismatches = np.abs(d1 - d2) > (abs_tol + rel_tol * np.abs(d2))
+            if np.any(mismatches):
+                print(f"\nArrays are not equal")
+                print(" -> ".join(f"key={k}" for k in key_path))
+                mismatched_elements = np.sum(mismatches)
+                print(f"Mismatched elements: {mismatched_elements} / {d1.size} ({mismatched_elements / d1.size:.2%})")
+                max_abs_diff = np.max(np.abs(d1 - d2))
+                max_rel_diff = np.max(np.abs(d1 - d2) / (np.abs(d2) + abs_tol))
+                print(f"Max absolute difference: {max_abs_diff:e}")
+                print(f"Max relative difference: {max_rel_diff:e}")
+                print(f" x: {d1}")
+                print(f" y: {d2}")
+
+    recursive_compare(dict1, dict2)
 
 def tensorsum_str(A, B):
     ra, ca = A.shape
     rb, cb = B.shape
-    C = np.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype for strings
+    C = jnp.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype for strings
 
     for i in range(ra):
         for j in range(ca):
             for k in range(rb):
                 for l in range(cb):
                     # Concatenate with '+' for addition
-                    C[i * rb + k, j * cb + l] = f"{A[i, j]} + {B[k, l]}"
+                    C = C.at[i * rb + k, j * cb + l].set(f"{A[i, j]} + {B[k, l]}")
     
     return C
-
 
 def tensorsumm_str(*args):
     '''
@@ -52,22 +92,28 @@ def kronn_str_pair(A, B):
     """
     ra, ca = A.shape
     rb, cb = B.shape
-    C = np.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype to store strings
+    C = jnp.empty((ra * rb, ca * cb), dtype=object)  # Use object dtype to store strings
 
     for i in range(ra):
         for j in range(ca):
             for k in range(rb):
                 for l in range(cb):
                     # Concatenate the strings from A and B with '*' in between
-                    C[i * rb + k, j * cb + l] = f"{A[i, j]} * {B[k, l]}"
+                    C = C.at[i * rb + k, j * cb + l].set(f"{A[i, j]} * {B[k, l]}")
 
     return C
 
 def string_meshgrid(*arrays):
-    mesh = np.meshgrid(*arrays, indexing='ij')
+    # Create meshgrid using jax.numpy
+    mesh = jnp.meshgrid(*arrays, indexing='ij')
+    
+    # Convert the meshgrid arrays to strings
+    mesh_str = [jnp.array(arr, dtype=str) for arr in mesh]
+    
     # Combine the meshgrid arrays element-wise using string concatenation with a space in between
-    concatenated = np.core.defchararray.add(mesh[0], ' ')  # Add space after the first string
-    concatenated = np.core.defchararray.add(concatenated, mesh[1])  # Add the second string
+    concatenated = jnp.char.add(mesh_str[0], ' ')  # Add space after the first string
+    concatenated = jnp.char.add(concatenated, mesh_str[1])  # Add the second string
+    
     return concatenated
 
 def kronn(*args):
@@ -76,43 +122,93 @@ def kronn(*args):
     """
     z = args[0]
     for i in range(1, len(args)):
-        z = np.kron(z, args[i])
+        z = jnp.kron(z, args[i])
     return z
 
+# @jit
+# def fminbound(func, bounds, xatol=1e-5, maxiter=500):
+#     # Unpack bounds
+#     a, b = bounds
+#     golden_mean = 0.5 * (3.0 - jnp.sqrt(5.0))  # Golden ratio
+#     sqrt_eps = jnp.sqrt(2.2e-16)  # Machine precision
 
-def beliefTransitionMatrix(p_appear, p_disappear, nq, w):
-    """
-    create transition matrix between nq belief states q to q' without color observation
-    diffusion is added
-    """
-    Tqqq = np.zeros((nq, nq))
-    dq = 1 / nq
-    a = 1 - p_disappear - p_appear
+#     # Initial setup for golden section search
+#     x1 = a + golden_mean * (b - a)
+#     x2 = b - golden_mean * (b - a)
+#     f1 = func(x1)
+#     f2 = func(x2)
+    
+#     # Iterate to narrow down the interval
+#     for _ in range(maxiter):
+#         # Check stopping criteria based on xatol (absolute tolerance)
+#         if jnp.abs(b - a) < xatol:
+#             break
+        
+#         # Choose which side to move based on function values
+#         if f1 < f2:
+#             # Update the interval to [a, x2]
+#             b, x2, f2 = x2, x1, f1
+#             x1 = a + golden_mean * (b - a)
+#             f1 = func(x1)
+#         else:
+#             # Update the interval to [x1, b]
+#             a, x1, f1 = x1, x2, f2
+#             x2 = b - golden_mean * (b - a)
+#             f2 = func(x2)
+    
+#     # Choose the final point with the lowest function value as the optimal x
+#     xopt = x1 if f1 < f2 else x2
+#     fopt = func(xopt)
+    
+#     return xopt, fopt
+def fminbound(func, bounds, xatol=1e-5, maxiter=500):
+    # Unpack bounds
+    a, b = bounds
+    a = jnp.float32(a)
+    b = jnp.float32(b)
+    golden_mean = 0.5 * (3.0 - jnp.sqrt(5.0))  # Golden ratio
+    sqrt_eps = jnp.sqrt(2.2e-16)  # Machine precision
 
-    for i in range(nq):
-        for j in range(nq):
-            q = i * dq
-            qq = j * dq
+    # Initial setup for golden section search
+    x1 = a + golden_mean * (b - a)
+    x2 = b - golden_mean * (b - a)
+    f1 = func(x1)
+    f2 = func(x2)
 
-            bm = (qq - p_appear) / a
-            bp = (qq + dq - p_appear) / a
+    def cond_fun(state):
+        a, b, x1, x2, f1, f2, i = state
+        return (jnp.abs(b - a) >= xatol) & (i < maxiter)
 
-            Tqqq[j, i] = max(0, min(q + dq, bp) - max(q, bm) )
-            Tqqq[j, i] = Tqqq[j, i] / (bp - bm) * sqrt(dq ** 2 + (bp - bm) ** 2)
-    Tqqq = Tqqq / np.tile(np.sum(Tqqq, 0), (nq, 1))
+    def body_fun(state):
+        a, b, x1, x2, f1, f2, i = state
 
-    nt = 20
-    d = w / nt
-    dD = toeplitz(np.insert(np.zeros(nq - 2), 0, np.array([-2 * d, d])))
-    dD[1, 0] = 2 * d
-    dD[-2, -1] = 2 * d
-    D = expm(dD * nt)
-    D = D / np.tile(np.sum(D, 0), (nq, 1))
+        def true_fun(_):
+            b_new, x2_new, f2_new = x2, x1, f1
+            x1_new = a + golden_mean * (b_new - a)
+            f1_new = func(x1_new)
+            return a, b_new, x1_new, x2_new, f1_new, f2_new, i + 1
 
-    Tqqq = np.dot(D, Tqqq)
+        def false_fun(_):
+            a_new, x1_new, f1_new = x1, x2, f2
+            x2_new = b - golden_mean * (b - a_new)
+            f2_new = func(x2_new)
+            return a_new, b, x1_new, x2_new, f1_new, f2_new, i + 1
 
-    return Tqqq
+        return lax.cond(f1 < f2, true_fun, false_fun, operand=None)
 
+    # Initial state
+    state = (a, b, x1, x2, f1, f2, 0)
+
+    # Run the while loop
+    a, b, x1, x2, f1, f2, _ = lax.while_loop(cond_fun, body_fun, state)
+
+    # Choose the final point with the lowest function value as the optimal x
+    xopt = lax.cond(f1 < f2, lambda _: x1, lambda _: x2, operand=None)
+    fopt = func(xopt)
+
+    return xopt, fopt
+
+# @jit
 def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, sigma):
     """
     Create transition matrix between nq belief states q to q' WITH action-dependent observations
@@ -125,44 +221,50 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
     Note: convention is site is active in state 1. and inactive in state 0.
     """
     def gb(x, k1, k0, p_sw, belief_location, other_location, action):
-        #the belief by convention is of whether the box is ACTIVE, 
-        #1 - x is the belief that the box is INACTIVE
-        if belief_location == other_location:#the agent is at this location
-            if action == 2:  # push button action
-                p_off = 1.  # Probability of staying off is 1
-                p_on = 1. - p_sw  # Probability of staying on is 1 - p_sw
-                p_sw_on_off = p_sw  # Probability of switching from on to off
-                # Probability of switching from off to on is 0 because the box is already off
-                # the agent must depart to the active location in order for the current location 
-                # for the box to turn back on
-                p_sw_off_on = 0.0
-            else:
-                p_off = 1.
-                p_on = 1.
-                p_sw_on_off = 0.0
-                p_sw_off_on = 0.0
-        else:#the agent is not at this location
-            if action == 2:  # push button action
-                # Probability of staying off is 1 - p_sw, because if it is off, 
-                # and the agent is not at this location, there is a chance p_sw it will turn back on
-                p_off = 1. - p_sw
-                # Probability of staying on is 1 since the agent is not at this location..
-                p_on = 1.
-                # Probability of switching from on to off
-                # no on to off switch can happen if the agent is not there
-                p_sw_on_off = 0.0
-                # Probability of switching from off to on is psw because the 
-                # agent is at the other location making it possible with a probability
-                # p_sw that the other location will turn off and this location will turn on
-                p_sw_off_on = p_sw
-            else:
-                p_off = 1.
-                p_on = 1.
-                p_sw_on_off = 0.0
-                p_sw_off_on = 0.0
+        # the belief by convention is of whether the box is ACTIVE, 
+        # 1 - x is the belief that the box is INACTIVE
 
-        #calculate the new belief b_{t+1}(s_{t+1}) = (1/c) * P(o_{t+1} | s_{t+1}, a_t) * bhat_{t+1}(s_{t+1})
-        #where bhat_{t+1}(s_{t+1}) = \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)
+        def agent_at_belief_location():
+            def push_button_action():
+                p_off = 1.0
+                p_on = 1.0 - p_sw
+                p_sw_on_off = p_sw
+                p_sw_off_on = 0.0
+                return p_off, p_on, p_sw_on_off, p_sw_off_on
+
+            def other_action():
+                p_off = 1.0
+                p_on = 1.0
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+                return p_off, p_on, p_sw_on_off, p_sw_off_on
+
+            return lax.cond(action == 2, push_button_action, other_action)
+
+        def agent_not_at_belief_location():
+            def push_button_action():
+                p_off = 1.0 - p_sw
+                p_on = 1.0
+                p_sw_on_off = 0.0
+                p_sw_off_on = p_sw
+                return p_off, p_on, p_sw_on_off, p_sw_off_on
+
+            def other_action():
+                p_off = 1.0
+                p_on = 1.0
+                p_sw_on_off = 0.0
+                p_sw_off_on = 0.0
+                return p_off, p_on, p_sw_on_off, p_sw_off_on
+
+            return lax.cond(action == 2, push_button_action, other_action)
+
+        #if the belief location is the other (i.e. not active location)
+        p_off, p_on, p_sw_on_off, p_sw_off_on = lax.cond(
+            belief_location == other_location, agent_at_belief_location, agent_not_at_belief_location
+        )
+
+        # calculate the new belief b_{t+1}(s_{t+1}) = (1/c) * P(o_{t+1} | s_{t+1}, a_t) * bhat_{t+1}(s_{t+1})
+        # where bhat_{t+1}(s_{t+1}) = \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)
 
         # the probability of the next observation given 
         # that the box is active at that next time step
@@ -176,17 +278,20 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
         # that it is active at the current time step times the belief that the box is inactive
         Pst0 = p_sw_off_on * (1 - x)
 
-        numerator = Pot1 * (Pst0 + Pst1)# the numerator of the belief update equation
+        numerator = Pot1 * (Pst0 + Pst1)  # the numerator of the belief update equation
 
-        #now calculate the normalization constant..
+        # now calculate the normalization constant..
         # \frac{1}{\sum_{s_{t+1}} P(o_{t+1} | s_{t+1}, a_t) * \sum_{s_t} P(s_{t+1} | s_t, a_t) * b_t(s_t)}
         c = k1 * p_on * x + k0 * p_sw_on_off * x + k0 * p_off * (1 - x) + k1 * p_sw_off_on * (1 - x)
 
-        if c == 0.0 and numerator == 0.0:
-            return 0
-        else:
-            bst1 = numerator / c# the new belief state at the next time step
-            return bst1
+        bst1 = lax.cond(
+            (c == 0.0) & (numerator == 0.0),
+            lambda _: 0.0,
+            lambda _: numerator / c,
+            operand=None
+        )
+
+        return bst1
 
     mu = 0
     dq = 1 / nq # belief resolution
@@ -194,142 +299,172 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
     
     #belief locations are the locations where the agent can make observations
     #about the state of the boxes. So these are locations != 0
-    belief_locations = [l for l in locations if l != 0]
+    belief_locations = jnp.array([1, 2])
 
     # Define action and location dependent observation emission matrices
     # Fill Obs_emis based on location-specific actions
     # by convention obs_emis[action] is NCol x N states.
     # so the probability of each possible observation given the state
-    Obs_emis = {bloc:{oloc:{action: np.empty((2,2)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    def set_push_button_emissions(bloc, oloc, action):
+        Obs_emis_bloc_bloc = jnp.empty((2, 2))
+        Obs_emis_bloc_oloc = jnp.empty((2, 2))
+
+        Obs_emis_bloc_bloc = Obs_emis_bloc_bloc.at[1, 0].set(0.0)
+        Obs_emis_bloc_bloc = Obs_emis_bloc_bloc.at[1, 1].set(p_rwd)
+        Obs_emis_bloc_bloc = Obs_emis_bloc_bloc.at[0, 0].set(1.0)
+        Obs_emis_bloc_bloc = Obs_emis_bloc_bloc.at[0, 1].set(1.0 - p_rwd)
+
+        Obs_emis_bloc_oloc = Obs_emis_bloc_oloc.at[1, 0].set(p_rwd)
+        Obs_emis_bloc_oloc = Obs_emis_bloc_oloc.at[1, 1].set(0.0)
+        Obs_emis_bloc_oloc = Obs_emis_bloc_oloc.at[0, 0].set(1.0 - p_rwd)
+        Obs_emis_bloc_oloc = Obs_emis_bloc_oloc.at[0, 1].set(1.0)
+
+        return Obs_emis_bloc_bloc, Obs_emis_bloc_oloc
+
+    def set_other_emissions(bloc, oloc, action):
+        Obs_emis_bloc_bloc = jnp.ones((Ncol + 1, 2)) / (Ncol + 1)
+        Obs_emis_bloc_oloc = jnp.ones((Ncol + 1, 2)) / (Ncol + 1)
+        return Obs_emis_bloc_bloc, Obs_emis_bloc_oloc
+
+    def update_obs_emis(Obs_emis, action, bloc, oloc):
+        Obs_emis = Obs_emis.copy()
+        Obs_emis_bloc_bloc, Obs_emis_bloc_oloc = lax.cond(
+            action == 2,
+            lambda _: set_push_button_emissions(bloc, oloc, action),
+            lambda _: set_other_emissions(bloc, oloc, action),
+            operand=None
+        )
+        Obs_emis[bloc][bloc][action] = Obs_emis_bloc_bloc
+        Obs_emis[bloc][oloc][action] = Obs_emis_bloc_oloc
+        return Obs_emis
+        
+    Obs_emis = {bloc.item():{oloc.item():{action.item(): jnp.empty((2,2)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
     for action in actions:
-        for bloc in belief_locations:#belief locations
-            if action == 2:  # push button
-                Obs_emis[bloc][bloc][action][1, 0] = 0.0# Probability of observing 1 (i.e. box is ON) when box is actually OFF
-                Obs_emis[bloc][bloc][action][1, 1] = p_rwd# Probability of observing 1 (i.e. box is ON) when box is indeed ON
-                Obs_emis[bloc][bloc][action][0, 0] = 1.0# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
-                Obs_emis[bloc][bloc][action][0, 1] = 1. - p_rwd# Probability of observing 0 (i.e. box is OFF) when box is actually ON
-                
-                #for the other location, the observation model is inverted. Because we are now considering
-                #the probability of making the observation at the box where the agent is located
-                #given the state of the box at the OTHER location. This enforces the dependence between
-                #the two boxes by essentially creating the inverse observation at the other location.
-                oloc = [l for l in belief_locations if l != bloc][0]
-                Obs_emis[bloc][oloc][action][1, 0] = p_rwd# Probability of observing 1 (i.e. box is ON) when other box is OFF
-                Obs_emis[bloc][oloc][action][1, 1] = 0.0# Probability of observing 1 (i.e. box is ON) when other box is ON
-                Obs_emis[bloc][oloc][action][0, 0] = 1. - p_rwd# Probability of observing 0 (i.e. box is OFF) when other box is OFF
-                Obs_emis[bloc][oloc][action][0, 1] = 1.0# Probability of observing 0 (i.e. box is OFF) when other box is ON
-
-                #cast as np.float32
-                Obs_emis[bloc][oloc][action] = np.array(Obs_emis[bloc][oloc][action], dtype=np.float32)
-                Obs_emis[bloc][bloc][action] = np.array(Obs_emis[bloc][bloc][action], dtype=np.float32)
-                ## create scenario for equal and opposite observations
-                # p_diff = 2*p_rwd - 1
-                # Obs_emis[bloc][bloc][action][1, 0] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is actually OFF
-                # Obs_emis[bloc][bloc][action][1, 1] = (1 + p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is indeed ON
-                # Obs_emis[bloc][bloc][action][0, 0] = (1 + p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is indeed OFF
-                # Obs_emis[bloc][bloc][action][0, 1] = (1 - p_diff)/2# Probability of observing 0 (i.e. box is OFF) when box is actually ON
-                # #set the other location to have the opposite observation
-                # oloc = [l for l in belief_locations if l != bloc][0]
-                # # Obs_emis[bloc][oloc][action][1, 0] = (1 + p_diff)/2# Probability of observing 1 (i.e. box is ON) when other box is OFF
-                # # Obs_emis[bloc][oloc][action][1, 1] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when other box is ON
-                # # Obs_emis[bloc][oloc][action][0, 0] = (1 - p_diff)/2# Probability of observing 0 (i.e. box is OFF) when other box is OFF
-                # # Obs_emis[bloc][oloc][action][0, 1] = (1 + p_diff)/2# Probability of observing 0 (i.e. box is OFF) when other box is ON
-                # Obs_emis[bloc][oloc][action] = np.ones_like(Obs_emis[bloc][bloc][action]) / Obs_emis[bloc][bloc][action].shape[0]
-
-                # # there are no observations made. This means
-                # #that the emissions from the observation model should carry no information
-                # #about the state of the box. This equates to a uniform distribution over the
-                # #possible observations for a given world state.
-                # other_locs = [l for l in belief_locations if l != bloc]
-                # for oloc in other_locs:
-                #     Obs_emis[bloc][oloc][action] = np.ones_like(Obs_emis[bloc][bloc][action]) / Obs_emis[bloc][bloc][action].shape[0]
-                #     #Obs_emis[bloc][oloc][action] = np.zeros_like(Obs_emis[bloc][bloc][action])
-            else:
-                #for all other actions, there are no observations made. This means
-                #that the emissions from the observation model should carry no information
-                #about the state of the box. This equates to a uniform distribution over the
-                #possible observations for a given world state.
-                for oloc in belief_locations:#all belief locations..
-                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2),dtype=np.float32) / (Ncol + 1)
-                    #Obs_emis[bloc][oloc][action] = np.zeros((Ncol + 1, 2))
+        action = action.item()
+        for bloc in belief_locations:  # belief locations
+            bloc = bloc.item()
+            oloc = int((2 - bloc) + 1)
+            Obs_emis = update_obs_emis(Obs_emis, action, bloc, oloc)
 
     # Define transition probabilities for states.. but now it's action-dependent AND location-dependent
     # so state transitions only probabilistically happen based on what action is taken and 
     # where the action is taken.
-    Trans_state = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
-    for action in actions:
-        for bloc in belief_locations:#belief locations
-            if action == 2:  # push button action
-                #the state transition matrix for the location where the button is pressed
-                Trans_state[bloc][bloc][action] = np.array([[1.0, p_sw],  # Probability of staying on/off or switching
-                                                            [0.0, 1 - p_sw]]).astype(np.float32)
-                #for all other locations...
-                #the probability of transitioning between states is the inverse 
-                #of the transition probability matrix of the location where the button is pressed
-                other_locs = [l for l in belief_locations if l != bloc]
-                for oloc in other_locs:
-                    Trans_state[bloc][oloc][action] = np.array([[1. - p_sw, 0.0],
-                                                                [p_sw, 1.0]]).astype(np.float32)
-            else:
-                for oloc in belief_locations:
-                    Trans_state[bloc][oloc][action] = np.array([[1, 0],  # Identity matrix (no transition)
-                                                                [0, 1]]).astype(np.float32)
+    def set_push_button_transitions(bloc, oloc, action):
+        Trans_state_bloc_bloc = jnp.array([[1.0, p_sw],  # Probability of staying on/off or switching
+                                        [0.0, 1 - p_sw]])
+        Trans_state_bloc_oloc = jnp.array([[1. - p_sw, 0.0],
+                                        [p_sw, 1.0]])
+        return Trans_state_bloc_bloc.astype(jnp.float32), Trans_state_bloc_oloc.astype(jnp.float32)
 
-    d = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
-    xopt = np.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action
-    height = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # height of the density
+    def set_other_transitions(bloc, oloc, action):
+        Trans_state_bloc_oloc = jnp.array([[1, 0],  # Identity matrix (no transition)
+                                        [0, 1]])
+        return Trans_state_bloc_oloc.astype(jnp.float32), Trans_state_bloc_oloc.astype(jnp.float32)
+
+    def update_trans_state(Trans_state, action, bloc, oloc):
+        Trans_state = Trans_state.copy()
+        Trans_state_bloc_bloc, Trans_state_bloc_oloc = lax.cond(
+            action == 2,
+            lambda _: set_push_button_transitions(bloc, oloc, action),
+            lambda _: set_other_transitions(bloc, oloc, action),
+            operand=None
+        )
+        Trans_state[bloc][bloc][action] = Trans_state_bloc_bloc
+        Trans_state[bloc][oloc][action] = Trans_state_bloc_oloc
+        return Trans_state
+
+    Trans_state = {bloc.item():{oloc.item():{} for oloc in belief_locations} for bloc in belief_locations}
+    for action in actions:
+        action = action.item()
+        for bloc in belief_locations:  # belief locations
+            bloc = bloc.item()
+            #set oloc to the other location
+            oloc = int((2 - bloc) + 1)
+            Trans_state = update_trans_state(Trans_state, action, bloc, oloc)
+
+    d = jnp.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
+    xopt = jnp.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action
+    height = jnp.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # height of the density
     
     # approximate belief transition matrix
-    Trans_belief_obs_approx = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    Trans_belief_obs_approx = {bloc.item():{oloc.item():{action.item(): jnp.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
     # obseration emission transition matrix
-    Obs_emis_trans = {bloc:{oloc:{} for oloc in belief_locations} for bloc in belief_locations}
+    Obs_emis_trans = {bloc.item():{oloc.item():{} for oloc in belief_locations} for bloc in belief_locations}
     # gaussian belief state densities
-    den = {bloc:{oloc:{action: np.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
+    den = {bloc.item():{oloc.item():{action.item(): jnp.zeros((Ncol + 1, nq, nq)) for action in actions} for oloc in belief_locations} for bloc in belief_locations}
 
+    def compute_xopt_d_height(i, j, n, k0, k1, bloc, oloc, action):
+        # Set up q and qq based on indices
+        q = i * dq + dq / 2
+        qq = j * dq + dq / 2
+
+        # Define `dist` for use in `fminbound`
+        def dist(x):
+            return jnp.sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_sw, bloc, oloc, action)) ** 2)
+
+        # Find xopt and d using `fminbound`
+        bounds = (0, 1)
+        xopt_temp, d_temp = fminbound(dist, bounds)
+
+        # Compute the density as a Gaussian approximation
+        den_temp = norm.pdf(d_temp, mu, sigma)
+
+        # Calculate `height` as a dot product of observation emissions and transition state
+        height_temp = jnp.dot(jnp.dot(Obs_emis[bloc][oloc][action][n, :],
+                                    Trans_state[bloc][oloc][action]),
+                            jnp.array([1 - q, q]))
+        
+        return xopt_temp, d_temp, den_temp, height_temp
+
+    # Vectorize the function across indices `i` and `j`
+    vectorized_compute = vmap(
+        vmap(compute_xopt_d_height, in_axes=(None, 0, None, None, None, None, None, None)),
+        in_axes=(0, None, None, None, None, None, None, None)
+    )
     # for each action and next observation pair the goal is to project or translate the 
     # joint probability of observations and state transitions into a discrete space of belief states.
     for b_index, bloc in enumerate(belief_locations):#belief states
+        bloc = bloc.item()
         for o_index, oloc in enumerate(belief_locations):#all action locations
+            oloc = oloc.item()
             for a_index, action in enumerate(actions):#for each possible current action
+                action = action.item()
                 # if action == 4:  # push button action
                 for n in range(Ncol + 1):# for each possible next observation
                     k0 = Obs_emis[bloc][oloc][action][n, 0]# probability of observing n given that the the box is INACTIVE 
                     k1 = Obs_emis[bloc][oloc][action][n, 1]# probability of observing n given that the the box is ACTIVE
-                    for i in range(nq):
-                        for j in range(nq):
-                            # Approximate the probability with Gaussian approximation
-                            q = i * dq + dq / 2  # past belief (along columns, index with i)
-                            qq = j * dq + dq / 2  # new belief (along rows, index with j)
 
-                            def dist(x):
-                                # the distance of (x, gb(x)) to the center of each bin
-                                return sqrt((q - x) ** 2 + (qq - gb(x, k1, k0, p_sw, bloc, oloc, action)) ** 2)
+                    # Apply vectorized function
+                    xopt_temp, d_temp, den_temp, height_temp = vectorized_compute(
+                        jnp.arange(nq), jnp.arange(nq), n, k0, k1, bloc, oloc, action
+                    )
+                    xopt_temp = jnp.transpose(xopt_temp)
+                    d_temp = jnp.transpose(d_temp)
+                    den_temp = jnp.transpose(den_temp)
+                    height_temp = jnp.transpose(height_temp)
 
-                            #find a value xopt between 0 and 1 that when advanced to the next time step using
-                            #the belief update function gb, (xopt, gb(xopt)) is the closest point to (q, qq). 
-                            xopt[b_index, o_index, a_index, n, j, i], d[b_index, o_index, a_index, n, j, i] = optimize.fminbound(dist, 0, 1, full_output=1)[0:2]
-                            
-                            #den is the density of the distance between the optimal belief state and the actual belief state
-                            #this represents the approximation error of the 
-                            den[bloc][oloc][action][n, j, i] = norm.pdf(d[b_index, o_index, a_index, n, j, i], mu, sigma)  # use this to approximate delta function with diffusion
-                            
-                            #height is O(o_t+1 | b_t, a_t) which is the product of
-                            #the expectation of the observation over states and the expectation of the state transition over states
-                            #and the expectation of the belief over states
-                            height[b_index, o_index, a_index, n, j, i] = Obs_emis[bloc][oloc][action][n, :].dot(Trans_state[bloc][oloc][action]).dot(np.array([1 - q, q]))#.dot(np.array([xopt[a_index,n, j, i], 1 - xopt[a_index,n, j, i]]))#
-                    
+                    # Set results in the arrays
+                    xopt = xopt.at[b_index, o_index, a_index, n].set(xopt_temp)
+                    d = d.at[b_index, o_index, a_index, n].set(d_temp)
+                    height = height.at[b_index, o_index, a_index, n].set(height_temp)
+                                
                     #this divides every element in the density by its column sum which normalizes
                     #the density to a transition probability.. this is P(b_t+1 | b_t, a_t, o_t+1)
-                    den[bloc][oloc][action][n, :, :] /= np.tile(np.sum(den[bloc][oloc][action][n, :, :], 0), (nq, 1))
+                    sum_vals = jnp.sum(den_temp, axis=0)
+                    den_temp /= np.tile(sum_vals, (nq, 1))
+                    # Perform element-wise division
+                    den[bloc][oloc][action] = den[bloc][oloc][action].at[n].set(den_temp)
+
                     #trans_belief_obs_approx is the approximate belief transition matrix for each observation
                     #which is the product of P(b_t+1 | b_t, a_t, o_t+1) and O(o_t+1 | b_t, a_t). In the math
                     #to get the belief transition matrix, we need to sum over all possible next observations.
                     # if action == 4:
-                    Trans_belief_obs_approx[bloc][oloc][action][n, :, :] = np.multiply(den[bloc][oloc][action][n, :, :], height[b_index, o_index, a_index, n, :, :])
+                    Trans_belief_obs_approx_temp = jnp.multiply(den_temp, height_temp)
+                    Trans_belief_obs_approx[bloc][oloc][action] = Trans_belief_obs_approx[bloc][oloc][action].at[n, :, :].set(Trans_belief_obs_approx_temp)
                     # else:
                         # Trans_belief_obs_approx[action][n, :, :] = np.multiply(den[action][n, :, :], np.identity(nq))
 
-                    Obs_emis_trans[bloc][oloc][action] = Obs_emis[bloc][oloc][action].dot(Trans_state[bloc][oloc][action])
+                    Obs_emis_trans[bloc][oloc][action] = jnp.dot(Obs_emis[bloc][oloc][action], Trans_state[bloc][oloc][action])
                 # else:
                 #     # for all other actions, the observation is always 0
                 #     # so optimizing x is not necessary, the belief states deterministically
@@ -951,11 +1086,11 @@ def reversekron(AB, n):
 def tensorsum(A, B):
     ra, ca = A.shape
     rb, cb = B.shape
-    C = np.empty((ra * rb, ca * cb))
+    C = jnp.empty((ra * rb, ca * cb))
 
     for i in range(ra):
         for j in range(ca):
-            C[i*rb : (i+1)*rb, j*cb : (j+1)*cb] = A[i, j] + B
+            C = C.at[i*rb : (i+1)*rb, j*cb : (j+1)*cb].set(A[i, j] + B)
 
     return C
 

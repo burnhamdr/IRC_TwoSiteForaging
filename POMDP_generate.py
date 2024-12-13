@@ -1,8 +1,15 @@
 from twoboxCol import *
-from twoboxCazettes import *
 from datetime import datetime
 import os
 import pickle
+import numpy as np
+import jax.numpy as jnp
+from twoboxCazettesJax import twoboxCazettesMDPdata as twoboxCazettesMDPdataJax
+from twoboxCazettesJax import twoboxCazettesIndependentMDPdata as twoboxCazettesIndependentMDPdataJax
+from twoboxCazettesJax import twoboxCazettesIndependentDependentMDPdata as twoboxCazettesIndependentDependentMDPdataJax
+from twoboxCazettes import twoboxCazettesMDPdata, twoboxCazettesIndependentMDPdata, twoboxCazettesIndependentDependentMDPdata
+
+import jax
 
 path = os.getcwd()
 
@@ -126,7 +133,7 @@ def twoboxColGenerate(parameters, parametersExp, sample_length, sample_number, n
 
 
 def twoboxCazettesGenerate(exp_type, parameters, parametersExp, sample_length, sample_number, nq, nr = 2, nl = 3, na = 5,
-                           discount = 0.99, save = True, lick_state=False):
+                           discount = 0.99, save = True, lick_state=False, use_jax=False):
     """
     Generate data of the teacher POMDPS
     """
@@ -161,29 +168,40 @@ def twoboxCazettesGenerate(exp_type, parameters, parametersExp, sample_length, s
     print("Generating data...")
     T = sample_length
     N = sample_number
-    if exp_type == 'dependent':
-        twoboxColdata = twoboxCazettesMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N, lick_state)
-    elif exp_type == 'independent':
-        twoboxColdata = twoboxCazettesIndependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
-    elif exp_type == 'independentDependent':
-        twoboxColdata = twoboxCazettesIndependentDependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
-    
+    if use_jax:
+        parameters = jnp.array(parameters)
+        parametersExp = jnp.array(parametersExp)
+        if exp_type == 'dependent':
+            with jax.check_tracer_leaks():
+                twoboxColdata = twoboxCazettesMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N, lick_state)
+        elif exp_type == 'independent':
+            twoboxColdata = twoboxCazettesIndependentMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+        elif exp_type == 'independentDependent':
+            twoboxColdata = twoboxCazettesIndependentDependentMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+    else:
+        if exp_type == 'dependent':
+            twoboxColdata = twoboxCazettesMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N, lick_state)
+        elif exp_type == 'independent':
+            twoboxColdata = twoboxCazettesIndependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+        elif exp_type == 'independentDependent':
+            twoboxColdata = twoboxCazettesIndependentDependentMDPdata(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+        
     twoboxColdata.dataGenerate_sfm()
 
-    hybrid = twoboxColdata.hybrid
-    action = twoboxColdata.action
-    location = twoboxColdata.location
-    belief1 = twoboxColdata.belief1
-    belief2 = twoboxColdata.belief2
-    reward = twoboxColdata.reward
-    trueState1 = twoboxColdata.trueState1
-    trueState2 = twoboxColdata.trueState2
-    color1 = twoboxColdata.color1
-    color2 = twoboxColdata.color2
+    hybrid = np.array(twoboxColdata.hybrid)
+    action = np.array(twoboxColdata.action)
+    location = np.array(twoboxColdata.location)
+    belief1 = np.array(twoboxColdata.belief1)
+    belief2 = np.array(twoboxColdata.belief2)
+    reward = np.array(twoboxColdata.reward)
+    trueState1 = np.array(twoboxColdata.trueState1)
+    trueState2 = np.array(twoboxColdata.trueState2)
+    color1 = np.array(twoboxColdata.color1)
+    color2 = np.array(twoboxColdata.color2)
+    actionDist = np.array(twoboxColdata.actionDist)
+    belief1Dist = np.array(twoboxColdata.belief1Dist)
+    belief2Dist = np.array(twoboxColdata.belief2Dist)
 
-    actionDist = twoboxColdata.actionDist
-    belief1Dist = twoboxColdata.belief1Dist
-    belief2Dist = twoboxColdata.belief2Dist
 
     # sampleNum * sampleTime * dim of observations(=3 here, action, reward, location)
     # organize data    
@@ -202,8 +220,8 @@ def twoboxCazettesGenerate(exp_type, parameters, parametersExp, sample_length, s
     dataN = {'observations': obsN, 'beliefs': latN, 'trueStates': truthN}
 
     if exp_type == 'dependent':
-        locationInd = twoboxColdata.location_ind
-        abstractLocations = twoboxColdata.abstract_locations
+        locationInd = np.array(twoboxColdata.location_ind)
+        abstractLocations = np.array(twoboxColdata.abstract_locations)
         obsN['locationInd'] = locationInd
         obsN['abstractLocations'] = abstractLocations
     if lick_state:
