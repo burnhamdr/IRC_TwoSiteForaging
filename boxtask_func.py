@@ -220,8 +220,8 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
                 Obs_emis[bloc][oloc][action][0, 1] = 1.0# Probability of observing 0 (i.e. box is OFF) when other box is ON
 
                 #cast as np.float32
-                Obs_emis[bloc][oloc][action] = np.array(Obs_emis[bloc][oloc][action], dtype=np.float32)
-                Obs_emis[bloc][bloc][action] = np.array(Obs_emis[bloc][bloc][action], dtype=np.float32)
+                Obs_emis[bloc][oloc][action] = np.array(Obs_emis[bloc][oloc][action], dtype=np.float64)
+                Obs_emis[bloc][bloc][action] = np.array(Obs_emis[bloc][bloc][action], dtype=np.float64)
                 ## create scenario for equal and opposite observations
                 # p_diff = 2*p_rwd - 1
                 # Obs_emis[bloc][bloc][action][1, 0] = (1 - p_diff)/2# Probability of observing 1 (i.e. box is ON) when box is actually OFF
@@ -250,7 +250,7 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
                 #about the state of the box. This equates to a uniform distribution over the
                 #possible observations for a given world state.
                 for oloc in belief_locations:#all belief locations..
-                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2),dtype=np.float32) / (Ncol + 1)
+                    Obs_emis[bloc][oloc][action] = np.ones((Ncol + 1, 2), dtype=np.float64) / (Ncol + 1)
                     #Obs_emis[bloc][oloc][action] = np.zeros((Ncol + 1, 2))
 
     # Define transition probabilities for states.. but now it's action-dependent AND location-dependent
@@ -262,18 +262,18 @@ def beliefTransitionMatrixGaussianCazettes(p_sw, p_rwd, nq, actions, locations, 
             if action == 2:  # push button action
                 #the state transition matrix for the location where the button is pressed
                 Trans_state[bloc][bloc][action] = np.array([[1.0, p_sw],  # Probability of staying on/off or switching
-                                                            [0.0, 1 - p_sw]]).astype(np.float32)
+                                                            [0.0, 1 - p_sw]]).astype(np.float64)
                 #for all other locations...
                 #the probability of transitioning between states is the inverse 
                 #of the transition probability matrix of the location where the button is pressed
                 other_locs = [l for l in belief_locations if l != bloc]
                 for oloc in other_locs:
                     Trans_state[bloc][oloc][action] = np.array([[1. - p_sw, 0.0],
-                                                                [p_sw, 1.0]]).astype(np.float32)
+                                                                [p_sw, 1.0]]).astype(np.float64)
             else:
                 for oloc in belief_locations:
                     Trans_state[bloc][oloc][action] = np.array([[1, 0],  # Identity matrix (no transition)
-                                                                [0, 1]]).astype(np.float32)
+                                                                [0, 1]]).astype(np.float64)
 
     d = np.zeros((len(belief_locations), len(belief_locations),len(actions), Ncol + 1, nq, nq))  # distance between q and q' for each action
     xopt = np.zeros((len(belief_locations), len(belief_locations), len(actions), Ncol + 1, nq, nq))  # optimal x for each action

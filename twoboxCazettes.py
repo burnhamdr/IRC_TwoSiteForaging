@@ -49,10 +49,11 @@ class twoboxCazettesMDP:
         self.nl = nl   # number of locations
         self.nlwh = 2*(nl - 1)   # number of locations with location history
         self.nlpbh = 2 # number of previous button press history locations (0 or 1)
+        # total number of outcomes, or unique system (world and agent) states
         if lick_state:
             self.n = self.nq * self.nq * self.nr * self.nlwh * self.nlpbh
         else:
-            self.n = self.nq * self.nq * self.nr * self.nlwh   # total number of outcomes, or unique system (world and agent) states
+            self.n = self.nq * self.nq * self.nr * self.nlwh 
         self.parameters = parameters
         #every action has a transition matrix and a reward function.
         # transition matrix, per action each column defines the probability of transitioning to each other unique system state
@@ -81,6 +82,7 @@ class twoboxCazettesMDP:
                     shape: (# of action) * (# of states, old state) * (# of states, new state)
         """
         rho = 1      # food in mouth is consumed
+
         if isinstance(self.parameters , ArrayBox):
             psw = self.parameters._value[0]   # location activity switches after button press
             prwd = self.parameters._value[1]    # reward is returned for button press at active location
@@ -119,7 +121,7 @@ class twoboxCazettesMDP:
         # and P(b_{t+1}|b_{t},a_{t},o_{t+1})
         # for box 1
         Tr = np.array([[1, rho], [0, 1 - rho]])  # consume reward
-        Trpb = np.array([[0.5,0.5], [0.5, 0.5]])
+        Trpb = np.array([[0.5, 0.5], [0.5, 0.5]])
 
         self.Trans_belief_obs, self.Obs_emis_trans, self.den = beliefTransitionMatrixGaussianCazettes(psw, prwd, self.nq, actions, locations, sigma = 1 / self.nq / 3)
         self.Obs_emis_trans1 = self.Obs_emis_trans[1]

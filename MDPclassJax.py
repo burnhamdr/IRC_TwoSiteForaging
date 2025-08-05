@@ -49,7 +49,7 @@ def _computeDimensions(transition):
 
 class MDP(object):
 
-    def __init__(self, transitions, reward, discount, epsilon, max_iter, mask=None):
+    def __init__(self, transitions, reward, discount, epsilon, max_iter, mask):
         # Initialise a MDP based on the input parameters.
 
         # Define the function to handle the discount initialization
@@ -103,12 +103,13 @@ class MDP(object):
         
         # we run a check on P and R to make sure they are describing an MDP. If
         # an exception isn't raised then they are assumed to be correct.
-        transitions_ = _np.array(transitions)#.astype(_np.float64)
-        reward_ = _np.array(reward)
+        transitions_ = _jnp.array(transitions)#.astype(_np.float64)
+        reward_ = _jnp.array(reward)
         check_(transitions_, reward_)
         self.S, self.A = _computeDimensions(transitions)
         self.P = self._computeTransition(transitions)
         self.R = self._computeReward(reward, transitions)
+        
 
         # the verbosity is by default turned off
         self.verbose = False
@@ -140,45 +141,45 @@ class MDP(object):
         #
         # If V hasn't been sent into the method, then we assume to be working
         # on the objects V attribute
-        def VisNone(_):
-            # this V should be a reference to the data rather than a copy
-            V = self.V
-        def VnotNone(_):
-            # make sure the user supplied V is of the right shape
-            def check_shape(_):
-                def _check_shape():
-                    checkify.check(V.shape in ((self.S,), (1, self.S)), "V is not the right shape (Bellman operator).")
-                checked_func = checkify.checkify(_check_shape)
-                checked_func()
-                return V
+        # def VisNone(_):
+        #     # this V should be a reference to the data rather than a copy
+        #     V = self.V
+        # def VnotNone(_):
+        #     # make sure the user supplied V is of the right shape
+        #     def check_shape(_):
+        #         def _check_shape():
+        #             checkify.check(V.shape in ((self.S,), (1, self.S)), "V is not the right shape (Bellman operator).")
+        #         checked_func = checkify.checkify(_check_shape)
+        #         checked_func()
+        #         return V
 
-            def handle_shape_error(_):
-                debug.callback(lambda: print("V must be a numpy array or matrix."))
-                return None
+        #     def handle_shape_error(_):
+        #         debug.callback(lambda: print("V must be a numpy array or matrix."))
+        #         return None
 
-            V = jax.lax.cond(hasattr(V, 'shape'), check_shape, handle_shape_error, operand=None)
+        #     V = jax.lax.cond(hasattr(V, 'shape'), check_shape, handle_shape_error, operand=None)
         
-        V = jax.lax.cond(V is None, VisNone, VnotNone, operand=None)
+        # V = jax.lax.cond(V is None, VisNone, VnotNone, operand=None)
         
-        def get_mask(_):
-            return jnp.ones((self.A, self.S))
+        # def get_mask(_):
+        #     return _jnp.ones((self.A, self.S))
 
-        def check_mask_shape(_):
-            def _check_mask_shape():
-                checkify.check(mask.shape == (self.A, self.S), "Mask is not the right shape.")
-            checked_func = checkify.checkify(_check_mask_shape)
-            checked_func()
-            return mask
+        # def check_mask_shape(_):
+        #     def _check_mask_shape():
+        #         checkify.check(mask.shape == (self.A, self.S), "Mask is not the right shape.")
+        #     checked_func = checkify.checkify(_check_mask_shape)
+        #     checked_func()
+        #     return mask
 
-        mask = jax.lax.cond(self.actionMask is None, get_mask, lambda _: jax.lax.cond(mask.shape == (self.A, self.S), check_mask_shape, lambda _: mask, operand=None), operand=None)
-
+        # mask = jax.lax.cond(self.actionMask is None, get_mask, lambda _: jax.lax.cond(mask.shape == (self.A, self.S), check_mask_shape, lambda _: mask, operand=None), operand=None)
+        mask = self.actionMask
         # Looping through each action the the Q-value matrix is calculated.
         # P and V can be any object that supports indexing, so it is important
         # that you know they define a valid MDP before calling the
         # _bellmanOperator method. Otherwise the results will be meaningless.
         # Define the function to compute Q-values for a single action
         def compute_Q(P_a, R_a):
-            return R_a + self.discount * _jnp.dot(P_a, V)
+            return R_a + self.discount * _jnp.dot(P_a, self.V)
 
         # Use vmap to vectorize the computation over actions
         Q = jax.vmap(compute_Q)(self.P, self.R)
@@ -188,7 +189,7 @@ class MDP(object):
         # Get the policy and value, for now it is being returned but...
         # Which way is better?
         # 1. Return, (policy, value)
-        return (Q.argmax(axis=0), Q.max(axis=0))
+        return (Q.argmax(axis=0).astype(_jnp.int32), Q.max(axis=0))
         # 2. update self.policy and self.V directly
         # self.V = Q.max(axis=1)
         # self.policy = Q.argmax(axis=1)
@@ -224,7 +225,7 @@ class MDP(object):
         V = jax.lax.cond(V is None, VisNone, VnotNone, operand=None)
         
         def get_mask(_):
-            return jnp.ones((self.A, self.S))
+            return _jnp.ones((self.A, self.S))
 
         def check_mask_shape(_):
             def _check_mask_shape():
@@ -299,9 +300,9 @@ class MDP(object):
         transition_array = jax.lax.fori_loop(0, self.A, loop_body, transition_array)
 
         # Convert the array to a tuple
-        transition_tuple = tuple(transition_array)
+        # transition_tuple = tuple(transition_array)
 
-        return transition_tuple
+        return transition_array#transition_tuple
     
     def _computeReward(self, reward, transition):
         # Compute the reward for the system in one state choosing an action.
@@ -627,7 +628,7 @@ class ValueIteration_sfmZW(MDP):
         state = {
             'iter': self.iter,
             'V': self.V,
-            'softpolicy': self.softpolicy,
+            'softpolicy': _jnp.zeros_like(self.R),  # Initialize softpolicy with zeros
             'variation': _jnp.inf,
             'continue_loop': True
         }
@@ -802,41 +803,51 @@ class ValueIteration_opZW(MDP):
 
         MDP.__init__(self, transitions, reward, discount, epsilon, max_iter, mask)
 
+        # # initialization of optional arguments
+        # # Define the function to handle the initialization of V when initial_value is 0
+        # def init_zero(_):
+        #     v_ = _jnp.zeros(self.S)
+        #     return v_
+
+        # # Define the function to handle the initialization of V when initial_value is not 0
+        # def init_non_zero(_):
+        #     def check_shape():
+        #         checkify.check(len(initial_value) == self.S, "The initial value must be a vector of length S.")
+            
+        #     checked_func = checkify.checkify(check_shape)
+        #     checked_func()
+            
+        #     v_ = _jnp.array(initial_value).reshape(self.S)
+            
+        #     return v_
+
+        # # Use lax.cond to handle the initialization of V
+        # self.V = jax.lax.cond(initial_value == 0, init_zero, init_non_zero, operand=None)
         # initialization of optional arguments
-        # Define the function to handle the initialization of V when initial_value is 0
-        def init_zero(_):
-            v_ = _jnp.zeros(self.S)
-            return v_
+        if initial_value == 0:
+            self.V = _jnp.zeros(self.S)
 
-        # Define the function to handle the initialization of V when initial_value is not 0
-        def init_non_zero(_):
-            def check_shape():
-                checkify.check(len(initial_value) == self.S, "The initial value must be a vector of length S.")
-            
-            checked_func = checkify.checkify(check_shape)
-            checked_func()
-            
-            v_ = _jnp.array(initial_value).reshape(self.S)
-            
-            return v_
-
-        # Use lax.cond to handle the initialization of V
-        self.V = jax.lax.cond(initial_value == 0, init_zero, init_non_zero, operand=None)
+        else:
+            assert len(initial_value) == self.S, "The initial value must be " \
+                "a vector of length S."
+            self.V = _jnp.array(initial_value).reshape(self.S)
 
         # Define the function to handle the discount < 1 case
         def discount_less_than_one(_):
-            self._boundIter(epsilon)
+            new_max_iter = self._boundIter(epsilon)
             t_ = epsilon * (1 - self.discount) / self.discount
-            return t_
+            return t_, new_max_iter
 
         # Define the function to handle the discount == 1 case
         def discount_equal_one(_):
             t_ = epsilon
-            return t_
+            return t_, self.max_iter.astype('int32')
 
         # Use lax.cond to handle the discount condition
-        self.thresh = jax.lax.cond(self.discount < 1, discount_less_than_one, discount_equal_one, operand=None)
-
+        thresh, max_iter = jax.lax.cond(self.discount < 1, discount_less_than_one, discount_equal_one, operand=None)
+        self.thresh = thresh
+        self.max_iter = max_iter
+        
     def _boundIter(self, epsilon):
         # Compute a bound for the number of iterations.
         #
@@ -890,13 +901,13 @@ class ValueIteration_opZW(MDP):
         v_diff = self.V - Vprev
         span = v_diff.max()  - v_diff.min()  + 1E-8
 
-        max_iter = (_math.log((epsilon * (1 - self.discount) / self.discount) /
-                    span ) / _math.log(self.discount * k))
+        max_iter = (_jnp.log((epsilon * (1 - self.discount) / self.discount) /
+                    span ) / _jnp.log(self.discount * k))
         #self.V = Vprev
 
-        self.max_iter = int(_math.ceil(max_iter))
+        return _jnp.ceil(max_iter).astype('int32')
 
-    def run(self, temperature):
+    def run(self):
         # Run the value iteration algorithm.
 
         # if self.verbose:
@@ -908,7 +919,7 @@ class ValueIteration_opZW(MDP):
         state = {
             'iter': self.iter,
             'V': self.V,
-            'softpolicy': self.softpolicy,
+            'policy': _jnp.zeros(self.S, dtype=_jnp.int32),  # Initialize policy with zeros
             'variation': _jnp.inf,
             'continue_loop': True
         }
@@ -923,7 +934,7 @@ class ValueIteration_opZW(MDP):
             Vprev = state['V']
 
             # Bellman Operator: compute policy and value functions
-            state['softpolicy'], state['V'] = self._bellmanOperator()
+            state['policy'], state['V'] = self._bellmanOperator()
 
             # Compute the variation
             v_diff = self.V - Vprev
@@ -959,6 +970,6 @@ class ValueIteration_opZW(MDP):
         # Update the class attributes
         self.iter = state['iter']
         self.V = tuple(state['V'].tolist())
-        self.softpolicy = tuple(state['softpolicy'].tolist())
+        self.policy = tuple(state['policy'].tolist())
 
         self.time = _time.time() - self.time

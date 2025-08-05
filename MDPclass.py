@@ -391,6 +391,7 @@ class ValueIteration_sfmZW(MDP):
             assert len(initial_value) == self.S, "The initial value must be " \
                 "a vector of length S."
             self.V = _np.array(initial_value).reshape(self.S)
+            
         if self.discount < 1:
             # compute a bound for the number of iterations and update the
             # stored value of self.max_iter

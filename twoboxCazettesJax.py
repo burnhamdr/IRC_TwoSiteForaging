@@ -491,8 +491,8 @@ class twoboxCazettesMDP:
             self.Trans_hybrid_obs12 = self.Trans_hybrid_obs12.at[i, j, g0, :, :].set(jnp.transpose(kronn(self.Tlg0, jnp.identity(self.nq), Tr, jnp.identity(self.nq))))
             self.Trans_hybrid_obs12 = self.Trans_hybrid_obs12.at[i, j, pb, :, :].set(jnp.transpose(block_diag(self.Tlpb, self.Tlpb, den_col[1][pb][(i,j)], den_col[2][pb][(i,j)])))
 
-    def solveMDP_op(self, epsilon = 0.001, niterations = 10000, initial_value=0):
-        vi = ValueIteration_opZW(self.ThA, self.R, self.discount, epsilon, niterations, initial_value, self.loc0_mask)
+    def solveMDP_op(self, epsilon = 0.001, niterations = 10000, initial_value=0, mask=None):
+        vi = ValueIteration_opZW(self.ThA, self.R, self.discount, epsilon, niterations, initial_value, mask)
         # optimal policy, stopping criterion changed to "converged Qvalue"
         # vi.setVerbose()
         vi.run()
@@ -500,9 +500,9 @@ class twoboxCazettesMDP:
         self.policy = jnp.array(vi.policy)
         self.Vop = vi.V
 
-    def solveMDP_sfm(self, epsilon = 0.001, niterations = 10000, initial_value=0):
+    def solveMDP_sfm(self, epsilon = 0.001, niterations = 10000, initial_value=0, mask=None):
         temperatureQ = self.parameters[7]
-        vi = ValueIteration_sfmZW(self.ThA, self.R, self.discount, epsilon, niterations, initial_value, self.loc0_mask)
+        vi = ValueIteration_sfmZW(self.ThA, self.R, self.discount, epsilon, niterations, initial_value, mask)
         # vi.setVerbose()
         vi.run(temperatureQ)
         self.Qsfm = self._QfromV(vi)   # shape na * number of state, use value to calculate Q value
@@ -547,8 +547,10 @@ class twoboxCazettesMDPdata(twoboxCazettesMDP):
         self.seed = seed
 
         self.setupMDP()
-        jax.jit(self.solveMDP_op())
-        jax.jit(self.solveMDP_sfm())
+        self.jitted_solveMDP_op = jax.jit(self.solveMDP_op, static_argnames=['initial_value'])
+        self.jitted_solveMDP_op(initial_value=0, mask=self.loc0_mask)
+        self.jitted_solveMDP_sfm = jax.jit(self.solveMDP_sfm, static_argnames=['initial_value'])
+        self.jitted_solveMDP_sfm(initial_value=0, mask=self.loc0_mask)
 
     def dataGenerate_sfm(self):
 
