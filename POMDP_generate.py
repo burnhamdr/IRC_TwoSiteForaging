@@ -5,7 +5,6 @@ import pickle
 import numpy as np
 import jax.numpy as jnp
 from twoboxCazettesJax import twoboxCazettesMDPdata as twoboxCazettesMDPdataJax
-from twoboxCazettesJax import twoboxCazettesIndependentMDPdata as twoboxCazettesIndependentMDPdataJax
 from twoboxCazettesJax import twoboxCazettesIndependentDependentMDPdata as twoboxCazettesIndependentDependentMDPdataJax
 from twoboxCazettes import twoboxCazettesMDPdata, twoboxCazettesIndependentMDPdata, twoboxCazettesIndependentDependentMDPdata
 
@@ -174,8 +173,8 @@ def twoboxCazettesGenerate(exp_type, parameters, parametersExp, sample_length, s
         if exp_type == 'dependent':
             with jax.check_tracer_leaks():
                 twoboxColdata = twoboxCazettesMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N, lick_state)
-        elif exp_type == 'independent':
-            twoboxColdata = twoboxCazettesIndependentMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
+        # elif exp_type == 'independent':
+        #     twoboxColdata = twoboxCazettesIndependentMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
         elif exp_type == 'independentDependent':
             twoboxColdata = twoboxCazettesIndependentDependentMDPdataJax(discount, nq, nr, na, nl, parameters, parametersExp, T, N)
     else:
